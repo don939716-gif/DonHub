@@ -4,7 +4,6 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -15,6 +14,10 @@ local Config = {
     AttackDistance = 7, 
     SwingDelay = 0.3
 }
+
+-- Animation Variables
+local WalkAnimID = "rbxassetid://1804263541"
+local CurrentWalkTrack = nil
 
 --// UI SETUP \\--
 
@@ -65,11 +68,11 @@ FarmTab:AddToggle({
                 print("Auto Farm Started")
             else
                 -- Stop movement and animation
+                ManageWalkAnim(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
                 end
-                ManageAnimation(Char, false)
             end
         end)
 	end    
@@ -85,44 +88,32 @@ function GetCharacter()
     return LocalPlayer.Character
 end
 
--- Animation Handling
-local CurrentAnimTrack = nil
-local CurrentAnimChar = nil
-
-function ManageAnimation(Char, ShouldPlay)
+-- New Function to Handle Walking Animation
+function ManageWalkAnim(ShouldPlay)
+    local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
-    local Animator = Humanoid and (Humanoid:FindFirstChild("Animator") or Humanoid:WaitForChild("Animator", 1))
+    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
     
     if not Animator then return end
 
-    -- Reset track if character changed
-    if CurrentAnimChar ~= Char then
-        CurrentAnimTrack = nil
-        CurrentAnimChar = Char
-    end
-
     if ShouldPlay then
-        if not CurrentAnimTrack or not CurrentAnimTrack.IsPlaying then
-            if not CurrentAnimTrack then
-                -- 1. Try to find the game's Run animation in Assets
-                local AnimAsset = ReplicatedStorage.Assets.Animations:FindFirstChild("Run") or 
-                                  ReplicatedStorage.Assets.Animations:FindFirstChild("Walk")
-                
-                -- 2. Fallback to a generic ID if game asset not found
-                if not AnimAsset then
-                    AnimAsset = Instance.new("Animation")
-                    AnimAsset.AnimationId = "rbxassetid://5077677146" -- Standard Run
-                end
-                
-                CurrentAnimTrack = Animator:LoadAnimation(AnimAsset)
-                CurrentAnimTrack.Priority = Enum.AnimationPriority.Movement
-            end
-            CurrentAnimTrack:Play()
+        -- Check if track exists and is valid for current character
+        if not CurrentWalkTrack or CurrentWalkTrack.Animation.AnimationId ~= WalkAnimID or CurrentWalkTrack.Parent ~= Animator then
+            local Anim = Instance.new("Animation")
+            Anim.AnimationId = WalkAnimID
+            CurrentWalkTrack = Animator:LoadAnimation(Anim)
+            CurrentWalkTrack.Looped = true
+            CurrentWalkTrack.Priority = Enum.AnimationPriority.Movement
+        end
+        
+        if not CurrentWalkTrack.IsPlaying then
+            CurrentWalkTrack:Play()
         end
     else
-        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            CurrentAnimTrack:Stop()
+        -- Stop animation
+        if CurrentWalkTrack and CurrentWalkTrack.IsPlaying then
+            CurrentWalkTrack:Stop()
         end
     end
 end
@@ -141,15 +132,13 @@ end
 function IsRockBroken(RockModel)
     if not RockModel or not RockModel.Parent then return true end
     
-    -- Check infoFrame for HP
     local InfoFrame = RockModel:FindFirstChild("infoFrame")
     if InfoFrame then
         local Frame = InfoFrame:FindFirstChild("Frame")
         if Frame then
             local HPLabel = Frame:FindFirstChild("rockHP")
             if HPLabel then
-                -- Matches "0 HP", "0/100", or just "0"
-                if HPLabel.Text == "0 HP" or string.sub(HPLabel.Text, 1, 2) == "0/" or HPLabel.Text == "0" then
+                if HPLabel.Text == "0 HP" or string.sub(HPLabel.Text, 1, 2) == "0/" then
                     return true
                 end
             end
@@ -173,7 +162,6 @@ function GetClosestRock()
         for _, Container in pairs(Area:GetChildren()) do
             for _, Item in pairs(Container:GetChildren()) do
                 if table.find(Config.SelectedRocks, Item.Name) and Item:FindFirstChild("Hitbox") then
-                    
                     if not IsRockBroken(Item) then
                         local Hitbox = Item.Hitbox
                         local Dist = (Root.Position - Hitbox.Position).Magnitude
@@ -207,7 +195,6 @@ function PathfindTo(TargetPosition)
     
     if not Root or not Humanoid then return end
 
-    -- Network Owner fix for smoother movement
     if Root.Anchored == false then
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
@@ -231,12 +218,11 @@ function PathfindTo(TargetPosition)
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
 
-            -- Move
+            -- Start Walking Animation
+            ManageWalkAnim(true)
+
             Humanoid:MoveTo(Waypoint.Position)
             
-            -- Force Animation ON
-            ManageAnimation(Char, true)
-
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
                 Humanoid.Jump = true
             end
@@ -248,8 +234,9 @@ function PathfindTo(TargetPosition)
             end
         end
     else
+        -- Fallback direct move
+        ManageWalkAnim(true)
         Humanoid:MoveTo(TargetPosition)
-        ManageAnimation(Char, true)
     end
 end
 
@@ -273,7 +260,7 @@ task.spawn(function()
                     local Distance = (Root.Position - TargetHitbox.Position).Magnitude
                     
                     if Distance > Config.AttackDistance then
-                        -- Move Mode
+                        -- Move towards rock
                         OrionLib:MakeNotification({
                             Name = "Farming",
                             Content = "Moving to " .. RockModel.Name,
@@ -281,9 +268,9 @@ task.spawn(function()
                         })
                         PathfindTo(TargetHitbox.Position)
                     else
-                        -- Mine Mode
-                        Char.Humanoid:MoveTo(Root.Position) -- Stop walking
-                        ManageAnimation(Char, false) -- Stop walking animation
+                        -- Close enough to mine
+                        ManageWalkAnim(false) -- Stop walking animation
+                        Char.Humanoid:MoveTo(Root.Position) 
                         
                         while Config.AutoFarm and RockModel and RockModel.Parent do
                             
@@ -291,11 +278,9 @@ task.spawn(function()
                                 break 
                             end
 
-                            -- Face the rock (Full 3D rotation)
                             local LookPos = TargetHitbox.Position
                             Root.CFrame = CFrame.new(Root.Position, LookPos)
                             
-                            -- Jump if rock is high
                             if LookPos.Y > (Root.Position.Y + 3.5) then
                                 Char.Humanoid.Jump = true
                             end
@@ -313,8 +298,8 @@ task.spawn(function()
                         end
                     end
                 else
-                    -- Idle Mode
-                    ManageAnimation(Char, false)
+                    -- No rocks found, stop animation
+                    ManageWalkAnim(false)
                     task.wait(0.5)
                 end
             else
