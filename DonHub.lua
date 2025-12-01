@@ -3,7 +3,6 @@ local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -25,7 +24,7 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local PhysicsLoop = nil -- The Bypass Loop
+local SpeedTask = nil -- Variable to hold our speed loop task
 
 --// UI SETUP \\--
 
@@ -75,7 +74,7 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement, animation, and physics override
+                -- Stop movement, animation, and reset speed
                 ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -107,39 +106,25 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Physics Bypass + Animation)
+-- State Manager (Handles Speed Loop + Animation)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
-    local Root = Char:FindFirstChild("HumanoidRootPart")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    
-    if not Humanoid or not Root or not Animator then return end
+    if not Humanoid or not Animator then return end
 
     if ShouldRun then
-        -- 1. PHYSICS BYPASS (Velocity Override)
-        if not PhysicsLoop then
-            PhysicsLoop = RunService.Heartbeat:Connect(function()
-                if Humanoid and Root and Humanoid.Parent then
-                    -- Attempt to set WalkSpeed (Visual)
-                    Humanoid.WalkSpeed = Config.RunSpeed
-                    
-                    -- Velocity Override (Physical Bypass)
-                    -- If the humanoid is trying to move (MoveDirection > 0)
-                    if Humanoid.MoveDirection.Magnitude > 0 then
-                        -- We calculate the velocity vector based on MoveDirection and our desired speed
-                        local TargetVelocity = Humanoid.MoveDirection * Config.RunSpeed
-                        
-                        -- We apply it to the RootPart, but we keep the Y velocity (Gravity) intact
-                        Root.AssemblyLinearVelocity = Vector3.new(
-                            TargetVelocity.X, 
-                            Root.AssemblyLinearVelocity.Y, 
-                            TargetVelocity.Z
-                        )
+        -- 1. FORCE SPEED (Loop Method)
+        -- We use a task loop to constantly set the speed, similar to the script you found.
+        if not SpeedTask then
+            SpeedTask = task.spawn(function()
+                while Config.AutoFarm do
+                    local CurrentChar = GetCharacter()
+                    if CurrentChar and CurrentChar:FindFirstChild("Humanoid") then
+                        CurrentChar.Humanoid.WalkSpeed = Config.RunSpeed
                     end
-                else
-                    if PhysicsLoop then PhysicsLoop:Disconnect() PhysicsLoop = nil end
+                    task.wait() -- Efficient wait (approx 30-60hz)
                 end
             end)
         end
@@ -156,22 +141,21 @@ function ManageRunState(ShouldRun)
 
         pcall(function()
             CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority
             CurrentAnimTrack.Looped = true
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. STOP PHYSICS LOOP
-        if PhysicsLoop then
-            PhysicsLoop:Disconnect()
-            PhysicsLoop = nil
+        -- 1. STOP SPEED LOOP
+        if SpeedTask then
+            task.cancel(SpeedTask) -- Immediately stop the loop
+            SpeedTask = nil
         end
         
-        -- Reset WalkSpeed
-        Humanoid.WalkSpeed = Config.WalkSpeed
-        
-        -- Reset Velocity (Stop sliding)
-        Root.AssemblyLinearVelocity = Vector3.new(0, Root.AssemblyLinearVelocity.Y, 0)
+        -- Reset speed to normal
+        if Humanoid then
+            Humanoid.WalkSpeed = Config.WalkSpeed
+        end
 
         -- 2. STOP ANIMATION
         if CurrentAnimTrack then
@@ -266,7 +250,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State (Physics Bypass)
+        -- Start Running State
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -321,7 +305,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunState(false) -- Stop physics bypass
+                        ManageRunState(false) -- Stop running loop
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
