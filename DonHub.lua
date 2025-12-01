@@ -32,7 +32,7 @@ local SpeedState = {
 }
 
 --// UI SETUP \\--
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V8", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V8"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V9", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V9"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -121,23 +121,16 @@ function ManageRunState(ShouldRun)
 
     if ShouldRun then
         -- 1. HANDLE SPEED (Infinite Yield Method)
-        -- If we are targeting a new humanoid (respawn) or not running yet
         if SpeedState.Humanoid ~= Humanoid or not SpeedState.IsRunning then
-            
-            -- Clean up old connection if it exists
             if SpeedState.Connection then SpeedState.Connection:Disconnect() end
 
-            -- Define the enforcer function
             local function EnforceSpeed()
                 if Humanoid.WalkSpeed ~= Config.RunSpeed then
                     Humanoid.WalkSpeed = Config.RunSpeed
                 end
             end
 
-            -- Apply immediately
             EnforceSpeed()
-
-            -- Connect to the signal (The "Infinite Yield" Magic)
             SpeedState.Connection = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(EnforceSpeed)
             SpeedState.Humanoid = Humanoid
             SpeedState.IsRunning = true
@@ -145,7 +138,7 @@ function ManageRunState(ShouldRun)
 
         -- 2. HANDLE ANIMATION
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return -- Animation already playing
+            return 
         end
 
         if Animator then
@@ -156,7 +149,7 @@ function ManageRunState(ShouldRun)
 
             pcall(function()
                 CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- Override everything
+                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
                 CurrentAnimTrack.Looped = true
                 CurrentAnimTrack:Play()
             end)
@@ -164,8 +157,6 @@ function ManageRunState(ShouldRun)
 
     else
         -- STOP RUNNING
-        
-        -- 1. Disconnect Speed Loop
         if SpeedState.Connection then
             SpeedState.Connection:Disconnect()
             SpeedState.Connection = nil
@@ -173,10 +164,8 @@ function ManageRunState(ShouldRun)
         SpeedState.IsRunning = false
         SpeedState.Humanoid = nil
 
-        -- Reset Speed
         Humanoid.WalkSpeed = Config.WalkSpeed
 
-        -- 2. Stop Animation
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
@@ -254,11 +243,12 @@ function PathfindTo(TargetPosition)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
+    -- SMOOTHER PATH SETTINGS
     local Path = PathfindingService:CreatePath({
-        AgentRadius = 2,
+        AgentRadius = 3, -- Increased to avoid hugging walls
         AgentHeight = 5,
         AgentCanJump = true,
-        WaypointSpacing = 4,
+        WaypointSpacing = 8, -- Increased to reduce wobbling (fewer points)
         Costs = { Water = 20 }
     })
 
@@ -269,23 +259,56 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State (Speed + Anim)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
 
+            -- 1. Check for CLOSER rocks while moving (The "Walk Past" Fix)
+            -- We run a quick check to see if ANY valid rock is within attack range
+            local NearbyRock = GetClosestRock()
+            if NearbyRock then
+                local Dist = (Root.Position - NearbyRock.Position).Magnitude
+                if Dist < Config.AttackDistance then
+                    -- We found a rock close by (either our target or a new one we walked past)
+                    -- Stop pathfinding and let the main loop handle mining it
+                    return 
+                end
+            end
+
+            -- 2. Move to Waypoint
             Humanoid:MoveTo(Waypoint.Position)
             
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
                 Humanoid.Jump = true
             end
             
-            local Reached = Humanoid.MoveToFinished:Wait()
-            
-            if (Root.Position - TargetPosition).Magnitude < Config.AttackDistance then
-                break
+            -- 3. Smooth Movement Loop (The "Wobble" Fix)
+            -- Instead of waiting for MoveToFinished, we check distance manually
+            -- If we get close enough (tolerance), we move to the next point immediately
+            local Timeout = 0
+            while Config.AutoFarm do
+                local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
+                
+                -- Tolerance: 4 studs. Cuts corners for smoother look.
+                if DistToWaypoint < 4 then 
+                    break 
+                end
+                
+                -- Timeout to prevent getting stuck
+                Timeout = Timeout + 0.1
+                if Timeout > 2 then -- If stuck for 2 seconds, skip point
+                    break 
+                end
+
+                -- Constant check for nearby rocks inside the movement loop
+                local CheckRock = GetClosestRock()
+                if CheckRock and (Root.Position - CheckRock.Position).Magnitude < Config.AttackDistance then
+                    return -- Exit to mine
+                end
+                
+                task.wait(0.1)
             end
         end
     else
@@ -324,7 +347,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunState(false) -- Stop running, reset speed
+                        ManageRunState(false) -- Stop running
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
