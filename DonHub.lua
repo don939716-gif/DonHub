@@ -17,7 +17,7 @@ local Config = {
     WalkSpeed = 11.79
 }
 
---// ANIMATION ASSETS (RUNNING) \\--
+--// ANIMATION ASSETS \\--
 local Anim_RunDefault = Instance.new("Animation")
 Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
 
@@ -25,7 +25,7 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local SpeedConnection = nil -- Stores the Heartbeat connection
+local SpeedConnection = nil -- Stores the Infinite Yield style connection
 
 --// UI SETUP \\--
 
@@ -77,7 +77,7 @@ FarmTab:AddToggle({
             else
                 -- Stop movement, animation, and reset speed
                 ManageRunState(false)
-                local Char = GetCharacter()
+                local Char = LocalPlayer.Character
                 if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
                 end
@@ -88,16 +88,8 @@ FarmTab:AddToggle({
 
 --// HELPER FUNCTIONS \\--
 
-function GetCharacter()
-    if Workspace:FindFirstChild("Living") then
-        local LivingChar = Workspace.Living:FindFirstChild(LocalPlayer.Name)
-        if LivingChar then return LivingChar end
-    end
-    return LocalPlayer.Character
-end
-
 function EquipPickaxe()
-    local Char = GetCharacter()
+    local Char = LocalPlayer.Character
     if not Char then return end
     if Char:FindFirstChild("Pickaxe") then return end
 
@@ -107,24 +99,29 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Heartbeat Speed Loop + Animation)
+-- State Manager (Infinite Yield Style Speed + Animation)
 function ManageRunState(ShouldRun)
-    local Char = GetCharacter()
+    local Char = LocalPlayer.Character
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
     if not Humanoid or not Animator then return end
 
     if ShouldRun then
-        -- 1. FORCE SPEED (Infinite Yield Method: Heartbeat)
+        -- 1. FORCE SPEED (Infinite Yield Method)
+        -- We connect to the signal. If the game tries to change speed, we change it back instantly.
         if not SpeedConnection then
-            SpeedConnection = RunService.Heartbeat:Connect(function()
-                -- We get the character dynamically inside the loop to handle respawns
-                local CurrentChar = GetCharacter()
-                if CurrentChar and CurrentChar:FindFirstChild("Humanoid") then
-                    CurrentChar.Humanoid.WalkSpeed = Config.RunSpeed
+            local function EnforceSpeed()
+                if Config.AutoFarm and Humanoid.WalkSpeed ~= Config.RunSpeed then
+                    Humanoid.WalkSpeed = Config.RunSpeed
                 end
-            end)
+            end
+            
+            -- Set initial speed
+            EnforceSpeed()
+            
+            -- Connect to property change
+            SpeedConnection = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(EnforceSpeed)
         end
 
         -- 2. PLAY ANIMATION
@@ -144,16 +141,12 @@ function ManageRunState(ShouldRun)
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. STOP SPEED LOOP
+        -- 1. DISCONNECT SPEED
         if SpeedConnection then
             SpeedConnection:Disconnect()
             SpeedConnection = nil
         end
-        
-        -- Reset speed to normal ONCE
-        if Humanoid then
-            Humanoid.WalkSpeed = Config.WalkSpeed
-        end
+        Humanoid.WalkSpeed = Config.WalkSpeed
 
         -- 2. STOP ANIMATION
         if CurrentAnimTrack then
@@ -182,7 +175,7 @@ function IsRockBroken(RockModel)
 end
 
 function GetClosestRock()
-    local Char = GetCharacter()
+    local Char = LocalPlayer.Character
     local Root = Char and Char:FindFirstChild("HumanoidRootPart")
     if not Root then return nil end
 
@@ -221,7 +214,7 @@ function MineRock()
 end
 
 function PathfindTo(TargetPosition)
-    local Char = GetCharacter()
+    local Char = LocalPlayer.Character
     if not Char then return end
     
     local Root = Char:FindFirstChild("HumanoidRootPart")
@@ -248,7 +241,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State (Speed + Anim)
+        -- Start Running State
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -281,7 +274,7 @@ task.spawn(function()
         task.wait()
         
         if Config.AutoFarm then
-            local Char = GetCharacter()
+            local Char = LocalPlayer.Character
             
             if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") and Char.Humanoid.Health > 0 then
                 EquipPickaxe()
