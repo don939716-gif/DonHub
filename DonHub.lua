@@ -13,9 +13,8 @@ local Config = {
     SelectedRocks = {},
     AttackDistance = 7,
     SwingDelay = 0.3,
-    -- We don't rely on WalkSpeed property anymore, we calculate the boost needed
-    -- Base is ~11.79, Target is ~21.69. Difference is ~9.9
-    SpeedBoost = 10 
+    RunSpeed = 21.69,
+    WalkSpeed = 11.79
 }
 
 --// ANIMATION ASSETS (RUNNING) \\--
@@ -26,7 +25,7 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local SpeedBypassConnection = nil
+local PhysicsLoop = nil -- The Bypass Loop
 
 --// UI SETUP \\--
 
@@ -76,7 +75,7 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement, animation, and speed bypass
+                -- Stop movement, animation, and physics override
                 ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -108,7 +107,7 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Speed Bypass + Animation)
+-- State Manager (Handles Physics Bypass + Animation)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
@@ -116,17 +115,31 @@ function ManageRunState(ShouldRun)
     local Root = Char:FindFirstChild("HumanoidRootPart")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
     
-    if not Humanoid or not Animator or not Root then return end
+    if not Humanoid or not Root or not Animator then return end
 
     if ShouldRun then
-        -- 1. SPEED BYPASS (CFrame Shift)
-        if not SpeedBypassConnection then
-            SpeedBypassConnection = RunService.Heartbeat:Connect(function(deltaTime)
-                -- Check if character exists and is trying to move
-                if Humanoid.MoveDirection.Magnitude > 0 then
-                    -- We manually push the character forward in the direction they are walking
-                    -- This ignores the server's WalkSpeed limit
-                    Root.CFrame = Root.CFrame + (Humanoid.MoveDirection * (Config.SpeedBoost * deltaTime))
+        -- 1. PHYSICS BYPASS (Velocity Override)
+        if not PhysicsLoop then
+            PhysicsLoop = RunService.Heartbeat:Connect(function()
+                if Humanoid and Root and Humanoid.Parent then
+                    -- Attempt to set WalkSpeed (Visual)
+                    Humanoid.WalkSpeed = Config.RunSpeed
+                    
+                    -- Velocity Override (Physical Bypass)
+                    -- If the humanoid is trying to move (MoveDirection > 0)
+                    if Humanoid.MoveDirection.Magnitude > 0 then
+                        -- We calculate the velocity vector based on MoveDirection and our desired speed
+                        local TargetVelocity = Humanoid.MoveDirection * Config.RunSpeed
+                        
+                        -- We apply it to the RootPart, but we keep the Y velocity (Gravity) intact
+                        Root.AssemblyLinearVelocity = Vector3.new(
+                            TargetVelocity.X, 
+                            Root.AssemblyLinearVelocity.Y, 
+                            TargetVelocity.Z
+                        )
+                    end
+                else
+                    if PhysicsLoop then PhysicsLoop:Disconnect() PhysicsLoop = nil end
                 end
             end)
         end
@@ -148,11 +161,17 @@ function ManageRunState(ShouldRun)
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. STOP SPEED BYPASS
-        if SpeedBypassConnection then
-            SpeedBypassConnection:Disconnect()
-            SpeedBypassConnection = nil
+        -- 1. STOP PHYSICS LOOP
+        if PhysicsLoop then
+            PhysicsLoop:Disconnect()
+            PhysicsLoop = nil
         end
+        
+        -- Reset WalkSpeed
+        Humanoid.WalkSpeed = Config.WalkSpeed
+        
+        -- Reset Velocity (Stop sliding)
+        Root.AssemblyLinearVelocity = Vector3.new(0, Root.AssemblyLinearVelocity.Y, 0)
 
         -- 2. STOP ANIMATION
         if CurrentAnimTrack then
@@ -247,7 +266,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State (Animation + CFrame Boost)
+        -- Start Running State (Physics Bypass)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -302,7 +321,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunState(false) -- Stop running loop
+                        ManageRunState(false) -- Stop physics bypass
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
