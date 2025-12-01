@@ -25,11 +25,11 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local SpeedLoop = nil -- Variable to hold our speed enforcer
+local VelocityLoop = nil -- Replaces SpeedLoop
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V6", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V6"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V7", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V7"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -75,7 +75,7 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement, animation, and reset speed
+                -- Stop movement, animation, and velocity loop
                 ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -107,29 +107,47 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Speed Loop + Animation)
+-- State Manager (Handles Velocity Bypass + Animation)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
+    local Root = Char:FindFirstChild("HumanoidRootPart")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    if not Humanoid or not Animator then return end
+    
+    if not Humanoid or not Animator or not Root then return end
 
     if ShouldRun then
-        -- 1. FORCE SPEED (RenderStepped Loop)
-        if not SpeedLoop then
-            SpeedLoop = RunService.RenderStepped:Connect(function()
-                if Humanoid and Humanoid.Parent then
-                    Humanoid.WalkSpeed = Config.RunSpeed
+        -- 1. VELOCITY BYPASS (Heartbeat Loop)
+        -- This forces the character to move at RunSpeed by manipulating physics directly
+        if not VelocityLoop then
+            VelocityLoop = RunService.Heartbeat:Connect(function()
+                local CurrentChar = GetCharacter()
+                if CurrentChar then
+                    local CurrentHum = CurrentChar:FindFirstChild("Humanoid")
+                    local CurrentRoot = CurrentChar:FindFirstChild("HumanoidRootPart")
+                    
+                    if CurrentHum and CurrentRoot and CurrentHum.MoveDirection.Magnitude > 0 then
+                        -- Calculate velocity based on MoveDirection (where pathfinding wants to go)
+                        local TargetVelocity = CurrentHum.MoveDirection * Config.RunSpeed
+                        
+                        -- Apply velocity, preserving Y (Gravity/Jumping)
+                        CurrentRoot.AssemblyLinearVelocity = Vector3.new(
+                            TargetVelocity.X, 
+                            CurrentRoot.AssemblyLinearVelocity.Y, 
+                            TargetVelocity.Z
+                        )
+                    end
                 else
-                    if SpeedLoop then SpeedLoop:Disconnect() SpeedLoop = nil end
+                    -- Cleanup if character is gone
+                    if VelocityLoop then VelocityLoop:Disconnect() VelocityLoop = nil end
                 end
             end)
         end
 
         -- 2. PLAY ANIMATION
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return -- Already playing
+            return 
         end
 
         local AnimationToLoad = Anim_RunDefault
@@ -139,16 +157,18 @@ function ManageRunState(ShouldRun)
 
         pcall(function()
             CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority to override walk
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
             CurrentAnimTrack.Looped = true
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. STOP SPEED LOOP
-        if SpeedLoop then
-            SpeedLoop:Disconnect()
-            SpeedLoop = nil
+        -- 1. STOP VELOCITY LOOP
+        if VelocityLoop then
+            VelocityLoop:Disconnect()
+            VelocityLoop = nil
         end
+        
+        -- Reset WalkSpeed just in case
         Humanoid.WalkSpeed = Config.WalkSpeed
 
         -- 2. STOP ANIMATION
@@ -244,7 +264,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State
+        -- Start Running State (Velocity Bypass)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -299,7 +319,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunState(false) -- Stop running loop
+                        ManageRunState(false) -- Stop velocity loop
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
