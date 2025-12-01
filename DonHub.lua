@@ -16,12 +16,13 @@ local Config = {
 }
 
 -- Animation Variables
-local WalkAnimID = "rbxassetid://180426354"
+-- CORRECTED ID FROM YOUR DECOMPILED SCRIPT
+local WalkAnimID = "rbxassetid://180426354" 
 local CurrentWalkTrack = nil
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V4", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V4"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V5", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V5"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -88,7 +89,7 @@ function GetCharacter()
     return LocalPlayer.Character
 end
 
--- New Function to Handle Walking Animation
+-- Function to Handle Walking Animation
 function ManageWalkAnim(ShouldPlay)
     local Char = GetCharacter()
     if not Char then return end
@@ -100,11 +101,15 @@ function ManageWalkAnim(ShouldPlay)
     if ShouldPlay then
         -- Check if track exists and is valid for current character
         if not CurrentWalkTrack or CurrentWalkTrack.Animation.AnimationId ~= WalkAnimID or CurrentWalkTrack.Parent ~= Animator then
+            -- Create new animation instance
             local Anim = Instance.new("Animation")
             Anim.AnimationId = WalkAnimID
+            
+            -- Load it
             CurrentWalkTrack = Animator:LoadAnimation(Anim)
             CurrentWalkTrack.Looped = true
-            CurrentWalkTrack.Priority = Enum.AnimationPriority.Movement
+            -- Set priority to Movement to override idle
+            CurrentWalkTrack.Priority = Enum.AnimationPriority.Movement 
         end
         
         if not CurrentWalkTrack.IsPlaying then
@@ -218,7 +223,7 @@ function PathfindTo(TargetPosition)
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
 
-            -- Start Walking Animation
+            -- FORCE WALK ANIMATION
             ManageWalkAnim(true)
 
             Humanoid:MoveTo(Waypoint.Position)
@@ -269,7 +274,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageWalkAnim(false) -- Stop walking animation
+                        ManageWalkAnim(false) -- STOP WALK ANIMATION
                         Char.Humanoid:MoveTo(Root.Position) 
                         
                         while Config.AutoFarm and RockModel and RockModel.Parent do
