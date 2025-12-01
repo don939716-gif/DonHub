@@ -12,17 +12,24 @@ local Config = {
     AutoFarm = false,
     SelectedRocks = {},
     AttackDistance = 7,
-    SwingDelay = 0.3
+    SwingDelay = 0.3,
+    RunSpeed = 21.69,
+    WalkSpeed = 11.79
 }
 
---// REMOTES \\--
-local RunRemote = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("CharacterService"):WaitForChild("RF"):WaitForChild("Run")
+--// ANIMATION ASSETS (RUNNING) \\--
+local Anim_RunDefault = Instance.new("Animation")
+Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
 
-local RunSpamEnabled = false
+local Anim_RunPickaxe = Instance.new("Animation")
+Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
+
+local CurrentAnimTrack = nil
+local SpeedLoop = nil -- Variable to hold our speed enforcer
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V8", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V8"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V6", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V6"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -68,8 +75,8 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop everything
-                ManageRunSpam(false)
+                -- Stop movement, animation, and reset speed
+                ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
@@ -100,25 +107,55 @@ function EquipPickaxe()
     end
 end
 
--- Run Spam Manager
-function ManageRunSpam(ShouldRun)
+-- State Manager (Handles Speed Loop + Animation)
+function ManageRunState(ShouldRun)
+    local Char = GetCharacter()
+    if not Char then return end
+    local Humanoid = Char:FindFirstChild("Humanoid")
+    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
+    if not Humanoid or not Animator then return end
+
     if ShouldRun then
-        if RunSpamEnabled then return end -- Already running
-        RunSpamEnabled = true
-        
-        task.spawn(function()
-            while RunSpamEnabled and Config.AutoFarm do
-                pcall(function()
-                    -- We use task.spawn inside to prevent yielding the loop if the server is slow
-                    task.spawn(function()
-                        RunRemote:InvokeServer()
-                    end)
-                end)
-                task.wait(0.1) -- Spam frequency
-            end
+        -- 1. FORCE SPEED (RenderStepped Loop)
+        if not SpeedLoop then
+            SpeedLoop = RunService.RenderStepped:Connect(function()
+                if Humanoid and Humanoid.Parent then
+                    Humanoid.WalkSpeed = Config.RunSpeed
+                else
+                    if SpeedLoop then SpeedLoop:Disconnect() SpeedLoop = nil end
+                end
+            end)
+        end
+
+        -- 2. PLAY ANIMATION
+        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
+            return -- Already playing
+        end
+
+        local AnimationToLoad = Anim_RunDefault
+        if Char:FindFirstChild("Pickaxe") then
+            AnimationToLoad = Anim_RunPickaxe
+        end
+
+        pcall(function()
+            CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority to override walk
+            CurrentAnimTrack.Looped = true
+            CurrentAnimTrack:Play()
         end)
     else
-        RunSpamEnabled = false
+        -- 1. STOP SPEED LOOP
+        if SpeedLoop then
+            SpeedLoop:Disconnect()
+            SpeedLoop = nil
+        end
+        Humanoid.WalkSpeed = Config.WalkSpeed
+
+        -- 2. STOP ANIMATION
+        if CurrentAnimTrack then
+            CurrentAnimTrack:Stop()
+            CurrentAnimTrack = nil
+        end
     end
 end
 
@@ -207,8 +244,8 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Spamming Run Remote
-        ManageRunSpam(true)
+        -- Start Running State
+        ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
@@ -228,7 +265,7 @@ function PathfindTo(TargetPosition)
         end
     else
         -- Fallback direct move
-        ManageRunSpam(true)
+        ManageRunState(true)
         Humanoid:MoveTo(TargetPosition)
     end
 end
@@ -262,7 +299,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunSpam(false) -- Stop running
+                        ManageRunState(false) -- Stop running loop
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
@@ -295,14 +332,14 @@ task.spawn(function()
                     end
                 else
                     -- No rocks found
-                    ManageRunSpam(false)
+                    ManageRunState(false)
                     task.wait(0.5)
                 end
             else
                 task.wait(1)
             end
         else
-            ManageRunSpam(false)
+            ManageRunState(false)
         end
     end
 end)
