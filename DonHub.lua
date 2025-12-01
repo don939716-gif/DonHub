@@ -15,20 +15,10 @@ local Config = {
     SwingDelay = 0.3
 }
 
---// REMOTE & ASSETS \\--
-
--- The Run Remote
+--// REMOTES \\--
 local RunRemote = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("CharacterService"):WaitForChild("RF"):WaitForChild("Run")
 
--- Animation Assets
-local Anim_RunDefault = Instance.new("Animation")
-Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
-
-local Anim_RunPickaxe = Instance.new("Animation")
-Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
-
-local CurrentAnimTrack = nil
-local RunLoopActive = false -- Control variable for the remote spam loop
+local RunSpamEnabled = false
 
 --// UI SETUP \\--
 
@@ -79,7 +69,7 @@ FarmTab:AddToggle({
                 print("Auto Farm Started")
             else
                 -- Stop everything
-                ManageRunState(false)
+                ManageRunSpam(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
@@ -110,56 +100,25 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Remote Spam + Animation)
-function ManageRunState(ShouldRun)
-    local Char = GetCharacter()
-    if not Char then return end
-    local Humanoid = Char:FindFirstChild("Humanoid")
-    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    
-    if not Humanoid or not Animator then return end
-
+-- Run Spam Manager
+function ManageRunSpam(ShouldRun)
     if ShouldRun then
-        -- 1. REMOTE SPAM LOOP
-        if not RunLoopActive then
-            RunLoopActive = true
-            task.spawn(function()
-                while RunLoopActive and Config.AutoFarm do
-                    -- We use pcall to ensure the script doesn't crash if the remote fails
-                    pcall(function()
+        if RunSpamEnabled then return end -- Already running
+        RunSpamEnabled = true
+        
+        task.spawn(function()
+            while RunSpamEnabled and Config.AutoFarm do
+                pcall(function()
+                    -- We use task.spawn inside to prevent yielding the loop if the server is slow
+                    task.spawn(function()
                         RunRemote:InvokeServer()
                     end)
-                    -- Wait a short time to prevent freezing, but fast enough to counter pathfinding
-                    task.wait(0.1) 
-                end
-            end)
-        end
-
-        -- 2. PLAY ANIMATION (Visuals)
-        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return 
-        end
-
-        local AnimationToLoad = Anim_RunDefault
-        if Char:FindFirstChild("Pickaxe") then
-            AnimationToLoad = Anim_RunPickaxe
-        end
-
-        pcall(function()
-            CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
-            CurrentAnimTrack.Looped = true
-            CurrentAnimTrack:Play()
+                end)
+                task.wait(0.1) -- Spam frequency
+            end
         end)
     else
-        -- 1. STOP REMOTE LOOP
-        RunLoopActive = false
-
-        -- 2. STOP ANIMATION
-        if CurrentAnimTrack then
-            CurrentAnimTrack:Stop()
-            CurrentAnimTrack = nil
-        end
+        RunSpamEnabled = false
     end
 end
 
@@ -248,8 +207,8 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Enable Run State (Remote Spam + Anim)
-        ManageRunState(true)
+        -- Start Spamming Run Remote
+        ManageRunSpam(true)
 
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
@@ -269,7 +228,7 @@ function PathfindTo(TargetPosition)
         end
     else
         -- Fallback direct move
-        ManageRunState(true)
+        ManageRunSpam(true)
         Humanoid:MoveTo(TargetPosition)
     end
 end
@@ -303,7 +262,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunState(false) -- Stop remote spam
+                        ManageRunSpam(false) -- Stop running
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
@@ -336,14 +295,14 @@ task.spawn(function()
                     end
                 else
                     -- No rocks found
-                    ManageRunState(false)
+                    ManageRunSpam(false)
                     task.wait(0.5)
                 end
             else
                 task.wait(1)
             end
         else
-            ManageRunState(false)
+            ManageRunSpam(false)
         end
     end
 end)
