@@ -11,18 +11,22 @@ local LocalPlayer = Players.LocalPlayer
 local Config = {
     AutoFarm = false,
     SelectedRocks = {},
-    AttackDistance = 7, 
+    AttackDistance = 7,
     SwingDelay = 0.3
 }
 
--- Animation Variables
--- CORRECTED ID FROM YOUR DECOMPILED SCRIPT
-local WalkAnimID = "rbxassetid://180426354" 
-local CurrentWalkTrack = nil
+--// ANIMATION ASSETS \\--
+local Anim_WalkDefault = Instance.new("Animation")
+Anim_WalkDefault.AnimationId = "rbxassetid://88060817740116"
+
+local Anim_WalkPickaxe = Instance.new("Animation")
+Anim_WalkPickaxe.AnimationId = "rbxassetid://112662918431105"
+
+local CurrentAnimTrack = nil
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V5", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V5"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V4", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V4"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -69,7 +73,7 @@ FarmTab:AddToggle({
                 print("Auto Farm Started")
             else
                 -- Stop movement and animation
-                ManageWalkAnim(false)
+                ManageWalkAnimation(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
@@ -89,40 +93,6 @@ function GetCharacter()
     return LocalPlayer.Character
 end
 
--- Function to Handle Walking Animation
-function ManageWalkAnim(ShouldPlay)
-    local Char = GetCharacter()
-    if not Char then return end
-    local Humanoid = Char:FindFirstChild("Humanoid")
-    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    
-    if not Animator then return end
-
-    if ShouldPlay then
-        -- Check if track exists and is valid for current character
-        if not CurrentWalkTrack or CurrentWalkTrack.Animation.AnimationId ~= WalkAnimID or CurrentWalkTrack.Parent ~= Animator then
-            -- Create new animation instance
-            local Anim = Instance.new("Animation")
-            Anim.AnimationId = WalkAnimID
-            
-            -- Load it
-            CurrentWalkTrack = Animator:LoadAnimation(Anim)
-            CurrentWalkTrack.Looped = true
-            -- Set priority to Movement to override idle
-            CurrentWalkTrack.Priority = Enum.AnimationPriority.Movement 
-        end
-        
-        if not CurrentWalkTrack.IsPlaying then
-            CurrentWalkTrack:Play()
-        end
-    else
-        -- Stop animation
-        if CurrentWalkTrack and CurrentWalkTrack.IsPlaying then
-            CurrentWalkTrack:Stop()
-        end
-    end
-end
-
 function EquipPickaxe()
     local Char = GetCharacter()
     if not Char then return end
@@ -131,6 +101,42 @@ function EquipPickaxe()
     local Backpack = LocalPlayer:FindFirstChild("Backpack")
     if Backpack and Backpack:FindFirstChild("Pickaxe") then
         Backpack.Pickaxe.Parent = Char
+    end
+end
+
+-- Animation Manager
+function ManageWalkAnimation(ShouldPlay)
+    local Char = GetCharacter()
+    if not Char then return end
+    local Humanoid = Char:FindFirstChild("Humanoid")
+    if not Humanoid then return end
+
+    if ShouldPlay then
+        -- If track is already playing, do nothing
+        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
+            return 
+        end
+
+        -- Determine which animation to use
+        local AnimationToLoad = Anim_WalkDefault
+        if Char:FindFirstChild("Pickaxe") then
+            AnimationToLoad = Anim_WalkPickaxe
+        end
+
+        -- Load and Play
+        -- We wrap in pcall in case of animation errors
+        pcall(function()
+            CurrentAnimTrack = Humanoid:LoadAnimation(AnimationToLoad)
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Movement
+            CurrentAnimTrack.Looped = true
+            CurrentAnimTrack:Play()
+        end)
+    else
+        -- Stop Animation
+        if CurrentAnimTrack then
+            CurrentAnimTrack:Stop()
+            CurrentAnimTrack = nil
+        end
     end
 end
 
@@ -219,12 +225,12 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
+        -- Start Walking Animation
+        ManageWalkAnimation(true)
+
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
-
-            -- FORCE WALK ANIMATION
-            ManageWalkAnim(true)
 
             Humanoid:MoveTo(Waypoint.Position)
             
@@ -240,7 +246,7 @@ function PathfindTo(TargetPosition)
         end
     else
         -- Fallback direct move
-        ManageWalkAnim(true)
+        ManageWalkAnimation(true)
         Humanoid:MoveTo(TargetPosition)
     end
 end
@@ -274,18 +280,21 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageWalkAnim(false) -- STOP WALK ANIMATION
-                        Char.Humanoid:MoveTo(Root.Position) 
+                        ManageWalkAnimation(false) -- Stop walking animation
+                        Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
+                        -- Mining Loop
                         while Config.AutoFarm and RockModel and RockModel.Parent do
                             
                             if IsRockBroken(RockModel) then
                                 break 
                             end
 
+                            -- Face the rock
                             local LookPos = TargetHitbox.Position
                             Root.CFrame = CFrame.new(Root.Position, LookPos)
                             
+                            -- Jump if high
                             if LookPos.Y > (Root.Position.Y + 3.5) then
                                 Char.Humanoid.Jump = true
                             end
@@ -303,13 +312,16 @@ task.spawn(function()
                         end
                     end
                 else
-                    -- No rocks found, stop animation
-                    ManageWalkAnim(false)
+                    -- No rocks found, stop animation just in case
+                    ManageWalkAnimation(false)
                     task.wait(0.5)
                 end
             else
                 task.wait(1)
             end
+        else
+            -- Ensure animation stops if autofarm is off
+            ManageWalkAnimation(false)
         end
     end
 end)
