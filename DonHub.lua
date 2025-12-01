@@ -3,6 +3,7 @@ local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -24,11 +25,16 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local SpeedTask = nil -- Variable to hold our speed loop task
+
+-- Speed Connection Holders (Infinite Yield Method)
+local SpeedConnections = {
+    wsLoop = nil,
+    wsCA = nil
+}
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V7", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V7"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V8", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V8"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -106,32 +112,45 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Speed Loop + Animation)
+-- State Manager (Uses Infinite Yield's Logic)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    if not Humanoid or not Animator then return end
-
+    
     if ShouldRun then
-        -- 1. FORCE SPEED (Loop Method)
-        -- We use a task loop to constantly set the speed, similar to the script you found.
-        if not SpeedTask then
-            SpeedTask = task.spawn(function()
-                while Config.AutoFarm do
-                    local CurrentChar = GetCharacter()
-                    if CurrentChar and CurrentChar:FindFirstChild("Humanoid") then
-                        CurrentChar.Humanoid.WalkSpeed = Config.RunSpeed
-                    end
-                    task.wait() -- Efficient wait (approx 30-60hz)
-                end
-            end)
+        -- 1. FORCE SPEED (Infinite Yield Method)
+        -- This detects when the game tries to change speed and instantly reverts it
+        local function WalkSpeedChange()
+            if Humanoid and Humanoid.Parent then
+                Humanoid.WalkSpeed = Config.RunSpeed
+            end
         end
+        
+        WalkSpeedChange() -- Set initially
+        
+        -- Disconnect old connection if exists
+        if SpeedConnections.wsLoop then SpeedConnections.wsLoop:Disconnect() end
+        
+        -- Connect to PropertyChangedSignal (The Magic Fix)
+        SpeedConnections.wsLoop = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(WalkSpeedChange)
+        
+        -- Handle Respawn
+        if SpeedConnections.wsCA then SpeedConnections.wsCA:Disconnect() end
+        SpeedConnections.wsCA = LocalPlayer.CharacterAdded:Connect(function(nChar)
+            -- Wait for character to load fully
+            task.wait(0.5) 
+            Char = GetCharacter()
+            Humanoid = Char:WaitForChild("Humanoid")
+            WalkSpeedChange()
+            if SpeedConnections.wsLoop then SpeedConnections.wsLoop:Disconnect() end
+            SpeedConnections.wsLoop = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(WalkSpeedChange)
+        end)
 
         -- 2. PLAY ANIMATION
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return -- Already playing
+            return 
         end
 
         local AnimationToLoad = Anim_RunDefault
@@ -139,20 +158,19 @@ function ManageRunState(ShouldRun)
             AnimationToLoad = Anim_RunPickaxe
         end
 
-        pcall(function()
-            CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority
-            CurrentAnimTrack.Looped = true
-            CurrentAnimTrack:Play()
-        end)
+        if Animator then
+            pcall(function()
+                CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
+                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action
+                CurrentAnimTrack.Looped = true
+                CurrentAnimTrack:Play()
+            end)
+        end
     else
         -- 1. STOP SPEED LOOP
-        if SpeedTask then
-            task.cancel(SpeedTask) -- Immediately stop the loop
-            SpeedTask = nil
-        end
+        if SpeedConnections.wsLoop then SpeedConnections.wsLoop:Disconnect() SpeedConnections.wsLoop = nil end
+        if SpeedConnections.wsCA then SpeedConnections.wsCA:Disconnect() SpeedConnections.wsCA = nil end
         
-        -- Reset speed to normal
         if Humanoid then
             Humanoid.WalkSpeed = Config.WalkSpeed
         end
