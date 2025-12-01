@@ -12,12 +12,15 @@ local Config = {
     AutoFarm = false,
     SelectedRocks = {},
     AttackDistance = 7,
-    SwingDelay = 0.3,
-    RunSpeed = 21.69,
-    WalkSpeed = 11.79
+    SwingDelay = 0.3
 }
 
---// ANIMATION ASSETS (RUNNING) \\--
+--// REMOTE & ASSETS \\--
+
+-- The Run Remote
+local RunRemote = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("CharacterService"):WaitForChild("RF"):WaitForChild("Run")
+
+-- Animation Assets
 local Anim_RunDefault = Instance.new("Animation")
 Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
 
@@ -25,11 +28,11 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local VelocityLoop = nil -- Replaces SpeedLoop
+local RunLoopActive = false -- Control variable for the remote spam loop
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V7", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V7"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V8", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V8"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -75,7 +78,7 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement, animation, and velocity loop
+                -- Stop everything
                 ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -107,45 +110,32 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Velocity Bypass + Animation)
+-- State Manager (Handles Remote Spam + Animation)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
-    local Root = Char:FindFirstChild("HumanoidRootPart")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
     
-    if not Humanoid or not Animator or not Root then return end
+    if not Humanoid or not Animator then return end
 
     if ShouldRun then
-        -- 1. VELOCITY BYPASS (Heartbeat Loop)
-        -- This forces the character to move at RunSpeed by manipulating physics directly
-        if not VelocityLoop then
-            VelocityLoop = RunService.Heartbeat:Connect(function()
-                local CurrentChar = GetCharacter()
-                if CurrentChar then
-                    local CurrentHum = CurrentChar:FindFirstChild("Humanoid")
-                    local CurrentRoot = CurrentChar:FindFirstChild("HumanoidRootPart")
-                    
-                    if CurrentHum and CurrentRoot and CurrentHum.MoveDirection.Magnitude > 0 then
-                        -- Calculate velocity based on MoveDirection (where pathfinding wants to go)
-                        local TargetVelocity = CurrentHum.MoveDirection * Config.RunSpeed
-                        
-                        -- Apply velocity, preserving Y (Gravity/Jumping)
-                        CurrentRoot.AssemblyLinearVelocity = Vector3.new(
-                            TargetVelocity.X, 
-                            CurrentRoot.AssemblyLinearVelocity.Y, 
-                            TargetVelocity.Z
-                        )
-                    end
-                else
-                    -- Cleanup if character is gone
-                    if VelocityLoop then VelocityLoop:Disconnect() VelocityLoop = nil end
+        -- 1. REMOTE SPAM LOOP
+        if not RunLoopActive then
+            RunLoopActive = true
+            task.spawn(function()
+                while RunLoopActive and Config.AutoFarm do
+                    -- We use pcall to ensure the script doesn't crash if the remote fails
+                    pcall(function()
+                        RunRemote:InvokeServer()
+                    end)
+                    -- Wait a short time to prevent freezing, but fast enough to counter pathfinding
+                    task.wait(0.1) 
                 end
             end)
         end
 
-        -- 2. PLAY ANIMATION
+        -- 2. PLAY ANIMATION (Visuals)
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
             return 
         end
@@ -162,14 +152,8 @@ function ManageRunState(ShouldRun)
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. STOP VELOCITY LOOP
-        if VelocityLoop then
-            VelocityLoop:Disconnect()
-            VelocityLoop = nil
-        end
-        
-        -- Reset WalkSpeed just in case
-        Humanoid.WalkSpeed = Config.WalkSpeed
+        -- 1. STOP REMOTE LOOP
+        RunLoopActive = false
 
         -- 2. STOP ANIMATION
         if CurrentAnimTrack then
@@ -264,7 +248,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State (Velocity Bypass)
+        -- Enable Run State (Remote Spam + Anim)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -319,7 +303,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunState(false) -- Stop velocity loop
+                        ManageRunState(false) -- Stop remote spam
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
