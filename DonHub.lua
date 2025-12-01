@@ -78,7 +78,6 @@ FarmTab:AddToggle({
                 ManageRunAnimation(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
-                    Char.Humanoid.WalkSpeed = Config.WalkSpeed -- Reset speed
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
                 end
             end
@@ -108,13 +107,13 @@ function EquipPickaxe()
 end
 
 -- Animation & Speed Manager
-function ManageRunAnimation(ShouldPlay)
+function ManageRunAnimation(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
     if not Humanoid then return end
 
-    if ShouldPlay then
+    if ShouldRun then
         -- Set Run Speed
         Humanoid.WalkSpeed = Config.RunSpeed
 
@@ -233,7 +232,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Run Animation & Speed
+        -- Start Running (Speed + Anim)
         ManageRunAnimation(true)
 
         for i, Waypoint in pairs(Waypoints) do
