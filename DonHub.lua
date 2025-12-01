@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -11,13 +12,13 @@ local LocalPlayer = Players.LocalPlayer
 local Config = {
     AutoFarm = false,
     SelectedRocks = {},
-    AttackDistance = 7, -- Slightly reduced to ensure we are well within range
-    SwingDelay = 0.3 -- Faster checking
+    AttackDistance = 7, 
+    SwingDelay = 0.3
 }
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V3", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V3"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V4", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V4"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -63,10 +64,10 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement
+                -- Stop movement immediately
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
-                    Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
+                    Char.Humanoid:Move(Vector3.zero) -- Stop inputs
                 end
             end
         end)
@@ -94,7 +95,6 @@ function EquipPickaxe()
     end
 end
 
--- Check if a rock is broken based on HP Label
 function IsRockBroken(RockModel)
     if not RockModel or not RockModel.Parent then return true end
     
@@ -105,7 +105,7 @@ function IsRockBroken(RockModel)
         if Frame then
             local HPLabel = Frame:FindFirstChild("rockHP")
             if HPLabel then
-                -- Check for "0 HP" or "0/" or empty
+                -- Check for "0 HP" or "0/" or empty string
                 if HPLabel.Text == "0 HP" or string.sub(HPLabel.Text, 1, 2) == "0/" then
                     return true
                 end
@@ -129,10 +129,7 @@ function GetClosestRock()
     for _, Area in pairs(RocksFolder:GetChildren()) do
         for _, Container in pairs(Area:GetChildren()) do
             for _, Item in pairs(Container:GetChildren()) do
-                -- Check name matches selection
                 if table.find(Config.SelectedRocks, Item.Name) and Item:FindFirstChild("Hitbox") then
-                    
-                    -- Check if already broken before selecting
                     if not IsRockBroken(Item) then
                         local Hitbox = Item.Hitbox
                         local Dist = (Root.Position - Hitbox.Position).Magnitude
@@ -157,19 +154,50 @@ function MineRock()
     end)
 end
 
-function PathfindTo(TargetPosition)
+-- Custom Movement Function (Replaces Humanoid:MoveTo)
+-- This simulates holding down keys by constantly updating Humanoid:Move()
+function MoveToCustom(TargetPosition)
     local Char = GetCharacter()
-    if not Char then return end
+    if not Char then return false end
     
     local Root = Char:FindFirstChild("HumanoidRootPart")
     local Humanoid = Char:FindFirstChild("Humanoid")
     
-    if not Root or not Humanoid then return end
+    if not Root or not Humanoid then return false end
 
-    -- Attempt to fix sliding by claiming network ownership of the root part
-    if Root.Anchored == false then
-        pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
+    -- Loop until we are close to the waypoint or farming stops
+    while Config.AutoFarm do
+        -- Update references
+        if not Char.Parent or not Root.Parent then return false end
+        
+        local CurrentPos = Root.Position
+        -- Ignore Y axis for distance check to prevent getting stuck on slopes
+        local FlatDist = (Vector3.new(CurrentPos.X, 0, CurrentPos.Z) - Vector3.new(TargetPosition.X, 0, TargetPosition.Z)).Magnitude
+        
+        if FlatDist < 1.5 then return true end -- Reached waypoint
+
+        -- Calculate Direction
+        local Direction = (TargetPosition - CurrentPos).Unit
+        
+        -- Move Humanoid
+        Humanoid:Move(Direction)
+        
+        -- Jump Logic (If target is higher)
+        if (TargetPosition.Y - CurrentPos.Y) > 2.5 then
+            Humanoid.Jump = true
+        end
+        
+        -- Wait for next frame (Heartbeat makes it smooth)
+        RunService.Heartbeat:Wait()
     end
+    return false
+end
+
+function PathfindTo(FinalTarget)
+    local Char = GetCharacter()
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
 
     local Path = PathfindingService:CreatePath({
         AgentRadius = 2,
@@ -179,8 +207,8 @@ function PathfindTo(TargetPosition)
         Costs = { Water = 20 }
     })
 
-    local Success, ErrorMessage = pcall(function()
-        Path:ComputeAsync(Root.Position, TargetPosition)
+    local Success, _ = pcall(function()
+        Path:ComputeAsync(Root.Position, FinalTarget)
     end)
 
     if Success and Path.Status == Enum.PathStatus.Success then
@@ -188,26 +216,19 @@ function PathfindTo(TargetPosition)
         
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
-            if not Char or not Char.Parent then break end
-
-            -- Move
-            Humanoid:MoveTo(Waypoint.Position)
             
-            -- Jump logic
-            if Waypoint.Action == Enum.PathWaypointAction.Jump then
-                Humanoid.Jump = true
-            end
+            -- Use custom movement to walk to this waypoint
+            MoveToCustom(Waypoint.Position)
             
-            -- Wait for move to finish, but timeout if stuck
-            local Reached = Humanoid.MoveToFinished:Wait()
-            
-            -- Check distance to actual target
-            if (Root.Position - TargetPosition).Magnitude < Config.AttackDistance then
+            -- Check if we are close enough to the FINAL target to stop pathfinding early
+            local DistToFinal = (Root.Position - FinalTarget).Magnitude
+            if DistToFinal < Config.AttackDistance then
                 break
             end
         end
     else
-        Humanoid:MoveTo(TargetPosition)
+        -- Fallback if pathfinding fails
+        MoveToCustom(FinalTarget)
     end
 end
 
@@ -239,20 +260,20 @@ task.spawn(function()
                         })
                         PathfindTo(TargetHitbox.Position)
                     else
-                        -- Close enough to mine
-                        Char.Humanoid:MoveTo(Root.Position) -- Stop walking
+                        -- Stop moving
+                        Char.Humanoid:Move(Vector3.zero)
                         
                         -- Mining Loop
                         while Config.AutoFarm and RockModel and RockModel.Parent do
                             
-                            -- 1. Check HP
+                            -- 1. Check HP immediately
                             if IsRockBroken(RockModel) then
-                                break -- Go to next rock immediately
+                                break 
                             end
 
-                            -- 2. Face the rock (3D LookAt to fix height issues)
+                            -- 2. Face the rock
                             local LookPos = TargetHitbox.Position
-                            Root.CFrame = CFrame.new(Root.Position, LookPos)
+                            Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
                             
                             -- 3. Height Check (Jump if rock is high)
                             if LookPos.Y > (Root.Position.Y + 3.5) then
@@ -263,15 +284,12 @@ task.spawn(function()
                             MineRock()
                             task.wait(Config.SwingDelay)
                             
-                            -- 5. Distance Check (in case we got pushed)
+                            -- 5. Distance Check
                             if (Root.Position - TargetHitbox.Position).Magnitude > Config.AttackDistance + 4 then
-                                break -- Re-pathfind
+                                break 
                             end
                             
-                            -- 6. Character Check
-                            if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then
-                                break
-                            end
+                            if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then break end
                         end
                     end
                 else
@@ -283,6 +301,13 @@ task.spawn(function()
             end
         end
     end
+end)
+
+-- Anti-AFK (Prevent disconnection)
+game:GetService("Players").LocalPlayer.Idled:Connect(function()
+    game:GetService("VirtualUser"):Button2Down(Vector2.new(0,0),workspace.CurrentCamera.CFrame)
+    task.wait(1)
+    game:GetService("VirtualUser"):Button2Up(Vector2.new(0,0),workspace.CurrentCamera.CFrame)
 end)
 
 OrionLib:Init()
