@@ -16,7 +16,7 @@ local Config = {
 }
 
 -- Animation Variables
-local WalkAnimID = "rbxassetid://180426354"
+local WalkAnimID = "rbxassetid://1804263541"
 local CurrentWalkTrack = nil
 
 --// UI SETUP \\--
