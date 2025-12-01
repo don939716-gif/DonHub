@@ -15,6 +15,10 @@ local Config = {
     SwingDelay = 0.3
 }
 
+--// STATE VARIABLES \\--
+local IsRunning = false
+local StaminaDepleted = false -- Tracks if we are currently recovering stamina
+
 --// ANIMATION ASSETS \\--
 local Anim_WalkDefault = Instance.new("Animation")
 Anim_WalkDefault.AnimationId = "rbxassetid://88060817740116"
@@ -26,7 +30,7 @@ local CurrentAnimTrack = nil
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V4", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V4"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V5", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V5"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -72,7 +76,8 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement and animation
+                -- Stop everything
+                ToggleRun(false)
                 ManageWalkAnimation(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -104,7 +109,40 @@ function EquipPickaxe()
     end
 end
 
--- Animation Manager
+--// STAMINA & RUN LOGIC \\--
+
+function GetStaminaLevel()
+    -- Safely attempt to find the GUI
+    local Success, Result = pcall(function()
+        return LocalPlayer.PlayerGui.StatusGui.Frame.StaminaGroup.Frame.Frame.AbsoluteSize.Y
+    end)
+    
+    if Success then
+        return Result
+    end
+    return 100 -- Assume full if GUI fails to read (fallback)
+end
+
+function ToggleRun(ShouldRun)
+    -- Don't spam remotes if state hasn't changed
+    if ShouldRun == IsRunning then return end
+
+    local CharServiceRF = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("CharacterService"):WaitForChild("RF")
+    
+    if ShouldRun then
+        pcall(function()
+            CharServiceRF:WaitForChild("Run"):InvokeServer()
+        end)
+        IsRunning = true
+    else
+        pcall(function()
+            CharServiceRF:WaitForChild("StopRun"):InvokeServer()
+        end)
+        IsRunning = false
+    end
+end
+
+--// ANIMATION MANAGER \\--
 function ManageWalkAnimation(ShouldPlay)
     local Char = GetCharacter()
     if not Char then return end
@@ -112,19 +150,13 @@ function ManageWalkAnimation(ShouldPlay)
     if not Humanoid then return end
 
     if ShouldPlay then
-        -- If track is already playing, do nothing
-        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return 
-        end
+        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then return end
 
-        -- Determine which animation to use
         local AnimationToLoad = Anim_WalkDefault
         if Char:FindFirstChild("Pickaxe") then
             AnimationToLoad = Anim_WalkPickaxe
         end
 
-        -- Load and Play
-        -- We wrap in pcall in case of animation errors
         pcall(function()
             CurrentAnimTrack = Humanoid:LoadAnimation(AnimationToLoad)
             CurrentAnimTrack.Priority = Enum.AnimationPriority.Movement
@@ -132,7 +164,6 @@ function ManageWalkAnimation(ShouldPlay)
             CurrentAnimTrack:Play()
         end)
     else
-        -- Stop Animation
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
@@ -225,13 +256,31 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Walking Animation
-        ManageWalkAnimation(true)
-
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
 
+            --// STAMINA LOGIC \\--
+            local CurrentStamina = GetStaminaLevel()
+            
+            -- Logic: If 0, wait until 100. If not 0 and not recovering, run.
+            if CurrentStamina <= 1 then
+                StaminaDepleted = true
+            elseif CurrentStamina >= 99 then
+                StaminaDepleted = false
+            end
+
+            if StaminaDepleted then
+                -- We are exhausted, walk normally
+                ToggleRun(false)
+                ManageWalkAnimation(true) -- Play custom walk
+            else
+                -- We have energy, run!
+                ManageWalkAnimation(false) -- Stop custom walk (Game handles run anim)
+                ToggleRun(true)
+            end
+
+            -- Move
             Humanoid:MoveTo(Waypoint.Position)
             
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
@@ -245,7 +294,8 @@ function PathfindTo(TargetPosition)
             end
         end
     else
-        -- Fallback direct move
+        -- Fallback direct move (Treat as walking to be safe)
+        ToggleRun(false)
         ManageWalkAnimation(true)
         Humanoid:MoveTo(TargetPosition)
     end
@@ -280,6 +330,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
+                        ToggleRun(false) -- Stop running
                         ManageWalkAnimation(false) -- Stop walking animation
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
@@ -290,11 +341,9 @@ task.spawn(function()
                                 break 
                             end
 
-                            -- Face the rock
                             local LookPos = TargetHitbox.Position
                             Root.CFrame = CFrame.new(Root.Position, LookPos)
                             
-                            -- Jump if high
                             if LookPos.Y > (Root.Position.Y + 3.5) then
                                 Char.Humanoid.Jump = true
                             end
@@ -312,7 +361,8 @@ task.spawn(function()
                         end
                     end
                 else
-                    -- No rocks found, stop animation just in case
+                    -- No rocks found
+                    ToggleRun(false)
                     ManageWalkAnimation(false)
                     task.wait(0.5)
                 end
@@ -320,7 +370,8 @@ task.spawn(function()
                 task.wait(1)
             end
         else
-            -- Ensure animation stops if autofarm is off
+            -- Ensure everything stops if autofarm is off
+            ToggleRun(false)
             ManageWalkAnimation(false)
         end
     end
