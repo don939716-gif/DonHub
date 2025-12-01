@@ -32,7 +32,7 @@ local SpeedState = {
 }
 
 --// UI SETUP \\--
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V9", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V9"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V10", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V10"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -243,12 +243,11 @@ function PathfindTo(TargetPosition)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
-    -- SMOOTHER PATH SETTINGS
     local Path = PathfindingService:CreatePath({
-        AgentRadius = 3, -- Increased to avoid hugging walls
+        AgentRadius = 3,
         AgentHeight = 5,
         AgentCanJump = true,
-        WaypointSpacing = 8, -- Increased to reduce wobbling (fewer points)
+        WaypointSpacing = 8,
         Costs = { Water = 20 }
     })
 
@@ -265,54 +264,42 @@ function PathfindTo(TargetPosition)
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
 
-            -- 1. Check for CLOSER rocks while moving (The "Walk Past" Fix)
-            -- We run a quick check to see if ANY valid rock is within attack range
             local NearbyRock = GetClosestRock()
             if NearbyRock then
                 local Dist = (Root.Position - NearbyRock.Position).Magnitude
                 if Dist < Config.AttackDistance then
-                    -- We found a rock close by (either our target or a new one we walked past)
-                    -- Stop pathfinding and let the main loop handle mining it
                     return 
                 end
             end
 
-            -- 2. Move to Waypoint
             Humanoid:MoveTo(Waypoint.Position)
             
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
                 Humanoid.Jump = true
             end
             
-            -- 3. Smooth Movement Loop (The "Wobble" Fix)
-            -- Instead of waiting for MoveToFinished, we check distance manually
-            -- If we get close enough (tolerance), we move to the next point immediately
             local Timeout = 0
             while Config.AutoFarm do
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
                 
-                -- Tolerance: 4 studs. Cuts corners for smoother look.
                 if DistToWaypoint < 4 then 
                     break 
                 end
                 
-                -- Timeout to prevent getting stuck
                 Timeout = Timeout + 0.1
-                if Timeout > 2 then -- If stuck for 2 seconds, skip point
+                if Timeout > 2 then
                     break 
                 end
 
-                -- Constant check for nearby rocks inside the movement loop
                 local CheckRock = GetClosestRock()
                 if CheckRock and (Root.Position - CheckRock.Position).Magnitude < Config.AttackDistance then
-                    return -- Exit to mine
+                    return
                 end
                 
                 task.wait(0.1)
             end
         end
     else
-        -- Fallback direct move
         ManageRunState(true)
         Humanoid:MoveTo(TargetPosition)
     end
@@ -350,6 +337,10 @@ task.spawn(function()
                         ManageRunState(false) -- Stop running
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
+                        -- FACE ROCK ONCE (Fixes Twitching)
+                        local LookPos = TargetHitbox.Position
+                        Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
+                        
                         -- Mining Loop
                         while Config.AutoFarm and RockModel and RockModel.Parent do
                             
@@ -357,12 +348,18 @@ task.spawn(function()
                                 break 
                             end
 
-                            -- Face the rock
-                            local LookPos = TargetHitbox.Position
-                            Root.CFrame = CFrame.new(Root.Position, LookPos)
+                            -- Only re-adjust facing if we moved significantly (Anti-Twitch)
+                            local CurrentLook = Root.CFrame.LookVector
+                            local TargetDir = (TargetHitbox.Position - Root.Position).Unit
+                            -- Ignore Y axis for angle check
+                            local DotProduct = CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z
                             
+                            if DotProduct < 0.5 then -- If we are facing away (e.g. pushed)
+                                Root.CFrame = CFrame.new(Root.Position, Vector3.new(TargetHitbox.Position.X, Root.Position.Y, TargetHitbox.Position.Z))
+                            end
+
                             -- Jump if high
-                            if LookPos.Y > (Root.Position.Y + 3.5) then
+                            if TargetHitbox.Position.Y > (Root.Position.Y + 3.5) then
                                 Char.Humanoid.Jump = true
                             end
 
