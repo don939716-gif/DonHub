@@ -13,8 +13,9 @@ local Config = {
     SelectedRocks = {},
     AttackDistance = 7,
     SwingDelay = 0.3,
-    RunSpeed = 21.69,
-    WalkSpeed = 11.79
+    -- We don't rely on WalkSpeed property anymore, we calculate the boost needed
+    -- Base is ~11.79, Target is ~21.69. Difference is ~9.9
+    SpeedBoost = 10 
 }
 
 --// ANIMATION ASSETS (RUNNING) \\--
@@ -25,11 +26,11 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local SpeedLoop = nil -- Variable to hold our speed enforcer
+local SpeedBypassConnection = nil
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V6", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V6"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V7", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V7"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -75,7 +76,7 @@ FarmTab:AddToggle({
             if Value then
                 print("Auto Farm Started")
             else
-                -- Stop movement, animation, and reset speed
+                -- Stop movement, animation, and speed bypass
                 ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -107,22 +108,25 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Handles Speed Loop + Animation)
+-- State Manager (Handles Speed Bypass + Animation)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
+    local Root = Char:FindFirstChild("HumanoidRootPart")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    if not Humanoid or not Animator then return end
+    
+    if not Humanoid or not Animator or not Root then return end
 
     if ShouldRun then
-        -- 1. FORCE SPEED (RenderStepped Loop)
-        if not SpeedLoop then
-            SpeedLoop = RunService.RenderStepped:Connect(function()
-                if Humanoid and Humanoid.Parent then
-                    Humanoid.WalkSpeed = Config.RunSpeed
-                else
-                    if SpeedLoop then SpeedLoop:Disconnect() SpeedLoop = nil end
+        -- 1. SPEED BYPASS (CFrame Shift)
+        if not SpeedBypassConnection then
+            SpeedBypassConnection = RunService.Heartbeat:Connect(function(deltaTime)
+                -- Check if character exists and is trying to move
+                if Humanoid.MoveDirection.Magnitude > 0 then
+                    -- We manually push the character forward in the direction they are walking
+                    -- This ignores the server's WalkSpeed limit
+                    Root.CFrame = Root.CFrame + (Humanoid.MoveDirection * (Config.SpeedBoost * deltaTime))
                 end
             end)
         end
@@ -139,17 +143,16 @@ function ManageRunState(ShouldRun)
 
         pcall(function()
             CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority to override walk
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
             CurrentAnimTrack.Looped = true
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. STOP SPEED LOOP
-        if SpeedLoop then
-            SpeedLoop:Disconnect()
-            SpeedLoop = nil
+        -- 1. STOP SPEED BYPASS
+        if SpeedBypassConnection then
+            SpeedBypassConnection:Disconnect()
+            SpeedBypassConnection = nil
         end
-        Humanoid.WalkSpeed = Config.WalkSpeed
 
         -- 2. STOP ANIMATION
         if CurrentAnimTrack then
@@ -244,7 +247,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State
+        -- Start Running State (Animation + CFrame Boost)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
