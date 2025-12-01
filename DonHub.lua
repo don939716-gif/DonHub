@@ -25,10 +25,11 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
+local SpeedLoop = nil -- Variable to hold the speed enforcement connection
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V5", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V5"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V6", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V6"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -112,34 +113,50 @@ function ManageRunAnimation(ShouldRun)
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
     if not Humanoid then return end
+    
+    -- Ensure Animator exists for proper animation loading
+    local Animator = Humanoid:FindFirstChild("Animator")
+    if not Animator then
+        Animator = Instance.new("Animator", Humanoid)
+    end
 
     if ShouldRun then
-        -- Set Run Speed
-        Humanoid.WalkSpeed = Config.RunSpeed
+        -- 1. Enforce Speed Loop (Prevents server from resetting it)
+        if not SpeedLoop then
+            SpeedLoop = RunService.RenderStepped:Connect(function()
+                if Char and Char:FindFirstChild("Humanoid") then
+                    Char.Humanoid.WalkSpeed = Config.RunSpeed
+                end
+            end)
+        end
 
-        -- If track is already playing, do nothing
+        -- 2. Animation Logic
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
             return 
         end
 
-        -- Determine which animation to use
         local AnimationToLoad = Anim_RunDefault
         if Char:FindFirstChild("Pickaxe") then
             AnimationToLoad = Anim_RunPickaxe
         end
 
-        -- Load and Play
         pcall(function()
-            CurrentAnimTrack = Humanoid:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Movement
+            CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority to override default walk
             CurrentAnimTrack.Looped = true
             CurrentAnimTrack:Play()
         end)
     else
-        -- Reset Speed
+        -- 1. Kill Speed Loop
+        if SpeedLoop then
+            SpeedLoop:Disconnect()
+            SpeedLoop = nil
+        end
+        
+        -- 2. Reset Speed Once
         Humanoid.WalkSpeed = Config.WalkSpeed
 
-        -- Stop Animation
+        -- 3. Stop Animation
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
