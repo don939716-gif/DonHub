@@ -25,7 +25,7 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-local SpeedLoop = nil -- Variable to hold the speed enforcement connection
+local SpeedLoop = nil -- Variable to hold our speed enforcer
 
 --// UI SETUP \\--
 
@@ -76,7 +76,7 @@ FarmTab:AddToggle({
                 print("Auto Farm Started")
             else
                 -- Stop movement, animation, and reset speed
-                ManageRunAnimation(false)
+                ManageRunState(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
@@ -107,32 +107,29 @@ function EquipPickaxe()
     end
 end
 
--- Animation & Speed Manager
-function ManageRunAnimation(ShouldRun)
+-- State Manager (Handles Speed Loop + Animation)
+function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
-    if not Humanoid then return end
-    
-    -- Ensure Animator exists for proper animation loading
-    local Animator = Humanoid:FindFirstChild("Animator")
-    if not Animator then
-        Animator = Instance.new("Animator", Humanoid)
-    end
+    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
+    if not Humanoid or not Animator then return end
 
     if ShouldRun then
-        -- 1. Enforce Speed Loop (Prevents server from resetting it)
+        -- 1. FORCE SPEED (RenderStepped Loop)
         if not SpeedLoop then
             SpeedLoop = RunService.RenderStepped:Connect(function()
-                if Char and Char:FindFirstChild("Humanoid") then
-                    Char.Humanoid.WalkSpeed = Config.RunSpeed
+                if Humanoid and Humanoid.Parent then
+                    Humanoid.WalkSpeed = Config.RunSpeed
+                else
+                    if SpeedLoop then SpeedLoop:Disconnect() SpeedLoop = nil end
                 end
             end)
         end
 
-        -- 2. Animation Logic
+        -- 2. PLAY ANIMATION
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return 
+            return -- Already playing
         end
 
         local AnimationToLoad = Anim_RunDefault
@@ -142,21 +139,19 @@ function ManageRunAnimation(ShouldRun)
 
         pcall(function()
             CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority to override default walk
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority to override walk
             CurrentAnimTrack.Looped = true
             CurrentAnimTrack:Play()
         end)
     else
-        -- 1. Kill Speed Loop
+        -- 1. STOP SPEED LOOP
         if SpeedLoop then
             SpeedLoop:Disconnect()
             SpeedLoop = nil
         end
-        
-        -- 2. Reset Speed Once
         Humanoid.WalkSpeed = Config.WalkSpeed
 
-        -- 3. Stop Animation
+        -- 2. STOP ANIMATION
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
@@ -249,8 +244,8 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running (Speed + Anim)
-        ManageRunAnimation(true)
+        -- Start Running State
+        ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
@@ -270,7 +265,7 @@ function PathfindTo(TargetPosition)
         end
     else
         -- Fallback direct move
-        ManageRunAnimation(true)
+        ManageRunState(true)
         Humanoid:MoveTo(TargetPosition)
     end
 end
@@ -304,7 +299,7 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ManageRunAnimation(false) -- Stop running, Reset Speed
+                        ManageRunState(false) -- Stop running loop
                         Char.Humanoid:MoveTo(Root.Position) -- Stop movement
                         
                         -- Mining Loop
@@ -337,14 +332,14 @@ task.spawn(function()
                     end
                 else
                     -- No rocks found
-                    ManageRunAnimation(false)
+                    ManageRunState(false)
                     task.wait(0.5)
                 end
             else
                 task.wait(1)
             end
         else
-            ManageRunAnimation(false)
+            ManageRunState(false)
         end
     end
 end)
