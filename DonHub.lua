@@ -25,12 +25,7 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 local CurrentAnimTrack = nil
-
--- Speed Connection Holders (Infinite Yield Method)
-local SpeedConnections = {
-    wsLoop = nil,
-    wsCA = nil
-}
+local SpeedConnection = nil -- Stores the Heartbeat connection
 
 --// UI SETUP \\--
 
@@ -112,45 +107,29 @@ function EquipPickaxe()
     end
 end
 
--- State Manager (Uses Infinite Yield's Logic)
+-- State Manager (Handles Heartbeat Speed Loop + Animation)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
-    
+    if not Humanoid or not Animator then return end
+
     if ShouldRun then
-        -- 1. FORCE SPEED (Infinite Yield Method)
-        -- This detects when the game tries to change speed and instantly reverts it
-        local function WalkSpeedChange()
-            if Humanoid and Humanoid.Parent then
-                Humanoid.WalkSpeed = Config.RunSpeed
-            end
+        -- 1. FORCE SPEED (Infinite Yield Method: Heartbeat)
+        if not SpeedConnection then
+            SpeedConnection = RunService.Heartbeat:Connect(function()
+                -- We get the character dynamically inside the loop to handle respawns
+                local CurrentChar = GetCharacter()
+                if CurrentChar and CurrentChar:FindFirstChild("Humanoid") then
+                    CurrentChar.Humanoid.WalkSpeed = Config.RunSpeed
+                end
+            end)
         end
-        
-        WalkSpeedChange() -- Set initially
-        
-        -- Disconnect old connection if exists
-        if SpeedConnections.wsLoop then SpeedConnections.wsLoop:Disconnect() end
-        
-        -- Connect to PropertyChangedSignal (The Magic Fix)
-        SpeedConnections.wsLoop = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(WalkSpeedChange)
-        
-        -- Handle Respawn
-        if SpeedConnections.wsCA then SpeedConnections.wsCA:Disconnect() end
-        SpeedConnections.wsCA = LocalPlayer.CharacterAdded:Connect(function(nChar)
-            -- Wait for character to load fully
-            task.wait(0.5) 
-            Char = GetCharacter()
-            Humanoid = Char:WaitForChild("Humanoid")
-            WalkSpeedChange()
-            if SpeedConnections.wsLoop then SpeedConnections.wsLoop:Disconnect() end
-            SpeedConnections.wsLoop = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(WalkSpeedChange)
-        end)
 
         -- 2. PLAY ANIMATION
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            return 
+            return -- Already playing
         end
 
         local AnimationToLoad = Anim_RunDefault
@@ -158,19 +137,20 @@ function ManageRunState(ShouldRun)
             AnimationToLoad = Anim_RunPickaxe
         end
 
-        if Animator then
-            pcall(function()
-                CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action
-                CurrentAnimTrack.Looped = true
-                CurrentAnimTrack:Play()
-            end)
-        end
+        pcall(function()
+            CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action -- High priority
+            CurrentAnimTrack.Looped = true
+            CurrentAnimTrack:Play()
+        end)
     else
         -- 1. STOP SPEED LOOP
-        if SpeedConnections.wsLoop then SpeedConnections.wsLoop:Disconnect() SpeedConnections.wsLoop = nil end
-        if SpeedConnections.wsCA then SpeedConnections.wsCA:Disconnect() SpeedConnections.wsCA = nil end
+        if SpeedConnection then
+            SpeedConnection:Disconnect()
+            SpeedConnection = nil
+        end
         
+        -- Reset speed to normal ONCE
         if Humanoid then
             Humanoid.WalkSpeed = Config.WalkSpeed
         end
@@ -268,7 +248,7 @@ function PathfindTo(TargetPosition)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- Start Running State
+        -- Start Running State (Speed + Anim)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
