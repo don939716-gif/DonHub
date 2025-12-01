@@ -17,7 +17,8 @@ local Config = {
 
 --// STATE VARIABLES \\--
 local IsRunning = false
-local StaminaDepleted = false -- Tracks if we are currently recovering stamina
+local StaminaDepleted = false
+local CurrentAnimTrack = nil
 
 --// ANIMATION ASSETS \\--
 local Anim_WalkDefault = Instance.new("Animation")
@@ -25,8 +26,6 @@ Anim_WalkDefault.AnimationId = "rbxassetid://88060817740116"
 
 local Anim_WalkPickaxe = Instance.new("Animation")
 Anim_WalkPickaxe.AnimationId = "rbxassetid://112662918431105"
-
-local CurrentAnimTrack = nil
 
 --// UI SETUP \\--
 
@@ -77,7 +76,7 @@ FarmTab:AddToggle({
                 print("Auto Farm Started")
             else
                 -- Stop everything
-                ToggleRun(false)
+                SetRunState(false)
                 ManageWalkAnimation(false)
                 local Char = GetCharacter()
                 if Char and Char:FindFirstChild("Humanoid") then
@@ -111,38 +110,36 @@ end
 
 --// STAMINA & RUN LOGIC \\--
 
-function GetStaminaLevel()
-    -- Safely attempt to find the GUI
-    local Success, Result = pcall(function()
+function GetStamina()
+    local Success, SizeY = pcall(function()
         return LocalPlayer.PlayerGui.StatusGui.Frame.StaminaGroup.Frame.Frame.AbsoluteSize.Y
     end)
-    
     if Success then
-        return Result
+        return SizeY
     end
-    return 100 -- Assume full if GUI fails to read (fallback)
+    return 100 -- Default to full if UI not found
 end
 
-function ToggleRun(ShouldRun)
-    -- Don't spam remotes if state hasn't changed
-    if ShouldRun == IsRunning then return end
-
-    local CharServiceRF = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("CharacterService"):WaitForChild("RF")
-    
-    if ShouldRun then
-        pcall(function()
-            CharServiceRF:WaitForChild("Run"):InvokeServer()
-        end)
-        IsRunning = true
+function SetRunState(Active)
+    if Active then
+        if not IsRunning then
+            pcall(function()
+                game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.CharacterService.RF.Run:InvokeServer()
+            end)
+            IsRunning = true
+        end
     else
-        pcall(function()
-            CharServiceRF:WaitForChild("StopRun"):InvokeServer()
-        end)
-        IsRunning = false
+        if IsRunning then
+            pcall(function()
+                game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.CharacterService.RF.StopRun:InvokeServer()
+            end)
+            IsRunning = false
+        end
     end
 end
 
 --// ANIMATION MANAGER \\--
+
 function ManageWalkAnimation(ShouldPlay)
     local Char = GetCharacter()
     if not Char then return end
@@ -150,7 +147,10 @@ function ManageWalkAnimation(ShouldPlay)
     if not Humanoid then return end
 
     if ShouldPlay then
-        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then return end
+        -- If track is already playing, do nothing
+        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
+            return 
+        end
 
         local AnimationToLoad = Anim_WalkDefault
         if Char:FindFirstChild("Pickaxe") then
@@ -164,12 +164,15 @@ function ManageWalkAnimation(ShouldPlay)
             CurrentAnimTrack:Play()
         end)
     else
+        -- Stop Animation
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
         end
     end
 end
+
+--// FARMING LOGIC \\--
 
 function IsRockBroken(RockModel)
     if not RockModel or not RockModel.Parent then return true end
@@ -261,9 +264,8 @@ function PathfindTo(TargetPosition)
             if not Char or not Char.Parent then break end
 
             --// STAMINA LOGIC \\--
-            local CurrentStamina = GetStaminaLevel()
+            local CurrentStamina = GetStamina()
             
-            -- Logic: If 0, wait until 100. If not 0 and not recovering, run.
             if CurrentStamina <= 1 then
                 StaminaDepleted = true
             elseif CurrentStamina >= 99 then
@@ -271,16 +273,16 @@ function PathfindTo(TargetPosition)
             end
 
             if StaminaDepleted then
-                -- We are exhausted, walk normally
-                ToggleRun(false)
+                -- Walk Mode (Recovering)
+                SetRunState(false)
                 ManageWalkAnimation(true) -- Play custom walk
             else
-                -- We have energy, run!
-                ManageWalkAnimation(false) -- Stop custom walk (Game handles run anim)
-                ToggleRun(true)
+                -- Run Mode
+                SetRunState(true)
+                ManageWalkAnimation(false) -- Stop custom walk (Game plays run anim)
             end
 
-            -- Move
+            --// MOVEMENT \\--
             Humanoid:MoveTo(Waypoint.Position)
             
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
@@ -294,8 +296,8 @@ function PathfindTo(TargetPosition)
             end
         end
     else
-        -- Fallback direct move (Treat as walking to be safe)
-        ToggleRun(false)
+        -- Fallback direct move
+        SetRunState(false)
         ManageWalkAnimation(true)
         Humanoid:MoveTo(TargetPosition)
     end
@@ -330,9 +332,9 @@ task.spawn(function()
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        ToggleRun(false) -- Stop running
-                        ManageWalkAnimation(false) -- Stop walking animation
-                        Char.Humanoid:MoveTo(Root.Position) -- Stop movement
+                        SetRunState(false) -- Stop Running
+                        ManageWalkAnimation(false) -- Stop Walking
+                        Char.Humanoid:MoveTo(Root.Position) -- Stop Movement
                         
                         -- Mining Loop
                         while Config.AutoFarm and RockModel and RockModel.Parent do
@@ -341,9 +343,11 @@ task.spawn(function()
                                 break 
                             end
 
+                            -- Face the rock
                             local LookPos = TargetHitbox.Position
                             Root.CFrame = CFrame.new(Root.Position, LookPos)
                             
+                            -- Jump if high
                             if LookPos.Y > (Root.Position.Y + 3.5) then
                                 Char.Humanoid.Jump = true
                             end
@@ -362,7 +366,7 @@ task.spawn(function()
                     end
                 else
                     -- No rocks found
-                    ToggleRun(false)
+                    SetRunState(false)
                     ManageWalkAnimation(false)
                     task.wait(0.5)
                 end
@@ -371,7 +375,7 @@ task.spawn(function()
             end
         else
             -- Ensure everything stops if autofarm is off
-            ToggleRun(false)
+            SetRunState(false)
             ManageWalkAnimation(false)
         end
     end
