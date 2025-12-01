@@ -10,14 +10,14 @@ local LocalPlayer = Players.LocalPlayer
 -- Configuration Variables
 local Config = {
     AutoFarm = false,
-    SelectedRocks = {}, -- Renamed to Rocks
-    AttackDistance = 8,
-    SwingDelay = 0.5
+    SelectedRocks = {},
+    AttackDistance = 7, -- Slightly reduced to ensure we are well within range
+    SwingDelay = 0.3 -- Faster checking
 }
 
 --// UI SETUP \\--
 
-local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V2"})
+local Window = OrionLib:MakeWindow({Name = "The Forge | Script Hub V3", HidePremium = false, SaveConfig = true, ConfigFolder = "TheForgeHub_V3"})
 
 local FarmTab = Window:MakeTab({
 	Name = "Auto Farm",
@@ -25,15 +25,14 @@ local FarmTab = Window:MakeTab({
 	PremiumOnly = false
 })
 
--- Get Rock Names from ReplicatedStorage for the Dropdown
+-- Get Rock Names
 local RockOptions = {}
--- Changed from Assets.Ores to Assets.Rocks as requested
 local RocksAssetFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Rocks")
 
 for _, rock in pairs(RocksAssetFolder:GetChildren()) do
     table.insert(RockOptions, rock.Name)
 end
-table.sort(RockOptions) -- Sort alphabetically
+table.sort(RockOptions)
 
 --// UI ELEMENTS \\--
 
@@ -60,20 +59,13 @@ FarmTab:AddToggle({
 	Callback = function(Value)
 		Config.AutoFarm = Value
         
-        -- Safety check to prevent UI freezing if character is missing
         pcall(function()
             if Value then
                 print("Auto Farm Started")
             else
-                -- Cancel movement immediately when disabled
-                local Char = nil
-                if Workspace:FindFirstChild("Living") and Workspace.Living:FindFirstChild(LocalPlayer.Name) then
-                    Char = Workspace.Living[LocalPlayer.Name]
-                elseif LocalPlayer.Character then
-                    Char = LocalPlayer.Character
-                end
-
-                if Char and Char:FindFirstChild("Humanoid") and Char:FindFirstChild("HumanoidRootPart") then
+                -- Stop movement
+                local Char = GetCharacter()
+                if Char and Char:FindFirstChild("Humanoid") then
                     Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
                 end
             end
@@ -83,29 +75,44 @@ FarmTab:AddToggle({
 
 --// HELPER FUNCTIONS \\--
 
--- Robust function to get the real character
 function GetCharacter()
-    -- The Forge puts characters in workspace.Living
     if Workspace:FindFirstChild("Living") then
         local LivingChar = Workspace.Living:FindFirstChild(LocalPlayer.Name)
         if LivingChar then return LivingChar end
     end
-    -- Fallback to standard character
     return LocalPlayer.Character
 end
 
 function EquipPickaxe()
     local Char = GetCharacter()
     if not Char then return end
-    
-    -- Check if already equipped
     if Char:FindFirstChild("Pickaxe") then return end
 
-    -- Check Backpack
     local Backpack = LocalPlayer:FindFirstChild("Backpack")
     if Backpack and Backpack:FindFirstChild("Pickaxe") then
         Backpack.Pickaxe.Parent = Char
     end
+end
+
+-- Check if a rock is broken based on HP Label
+function IsRockBroken(RockModel)
+    if not RockModel or not RockModel.Parent then return true end
+    
+    -- Check infoFrame for HP
+    local InfoFrame = RockModel:FindFirstChild("infoFrame")
+    if InfoFrame then
+        local Frame = InfoFrame:FindFirstChild("Frame")
+        if Frame then
+            local HPLabel = Frame:FindFirstChild("rockHP")
+            if HPLabel then
+                -- Check for "0 HP" or "0/" or empty
+                if HPLabel.Text == "0 HP" or string.sub(HPLabel.Text, 1, 2) == "0/" then
+                    return true
+                end
+            end
+        end
+    end
+    return false
 end
 
 function GetClosestRock()
@@ -119,20 +126,21 @@ function GetClosestRock()
     local RocksFolder = Workspace:FindFirstChild("Rocks")
     if not RocksFolder then return nil end
     
-    -- Recursively scan the Rocks folder
-    -- Structure: Rocks -> Area -> SpawnLocation -> RockName -> Hitbox
     for _, Area in pairs(RocksFolder:GetChildren()) do
         for _, Container in pairs(Area:GetChildren()) do
-            -- Check children of the container (SpawnLocation)
             for _, Item in pairs(Container:GetChildren()) do
-                -- Check if the Item name matches our selection (e.g., "Pebble")
+                -- Check name matches selection
                 if table.find(Config.SelectedRocks, Item.Name) and Item:FindFirstChild("Hitbox") then
-                    local Hitbox = Item.Hitbox
-                    local Dist = (Root.Position - Hitbox.Position).Magnitude
                     
-                    if Dist < ClosestDist then
-                        ClosestDist = Dist
-                        ClosestRock = Hitbox
+                    -- Check if already broken before selecting
+                    if not IsRockBroken(Item) then
+                        local Hitbox = Item.Hitbox
+                        local Dist = (Root.Position - Hitbox.Position).Magnitude
+                        
+                        if Dist < ClosestDist then
+                            ClosestDist = Dist
+                            ClosestRock = Hitbox
+                        end
                     end
                 end
             end
@@ -158,14 +166,17 @@ function PathfindTo(TargetPosition)
     
     if not Root or not Humanoid then return end
 
+    -- Attempt to fix sliding by claiming network ownership of the root part
+    if Root.Anchored == false then
+        pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
+    end
+
     local Path = PathfindingService:CreatePath({
         AgentRadius = 2,
         AgentHeight = 5,
         AgentCanJump = true,
         WaypointSpacing = 4,
-        Costs = {
-            Water = 20
-        }
+        Costs = { Water = 20 }
     })
 
     local Success, ErrorMessage = pcall(function()
@@ -176,28 +187,26 @@ function PathfindTo(TargetPosition)
         local Waypoints = Path:GetWaypoints()
         
         for i, Waypoint in pairs(Waypoints) do
-            -- Stop if toggle is turned off
             if not Config.AutoFarm then break end
-            
-            -- Re-check character existence in case of death during path
             if not Char or not Char.Parent then break end
 
+            -- Move
             Humanoid:MoveTo(Waypoint.Position)
             
+            -- Jump logic
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
                 Humanoid.Jump = true
             end
             
-            -- MoveToFinished with a timeout to prevent getting stuck
-            local MoveSuccess = Humanoid.MoveToFinished:Wait()
+            -- Wait for move to finish, but timeout if stuck
+            local Reached = Humanoid.MoveToFinished:Wait()
             
-            -- Check distance to actual target to see if we can stop early
+            -- Check distance to actual target
             if (Root.Position - TargetPosition).Magnitude < Config.AttackDistance then
                 break
             end
         end
     else
-        -- Fallback: Direct movement
         Humanoid:MoveTo(TargetPosition)
     end
 end
@@ -206,7 +215,7 @@ end
 
 task.spawn(function()
     while true do
-        task.wait() -- Always wait to prevent crash
+        task.wait()
         
         if Config.AutoFarm then
             local Char = GetCharacter()
@@ -218,35 +227,48 @@ task.spawn(function()
                 
                 if TargetHitbox then
                     local Root = Char.HumanoidRootPart
+                    local RockModel = TargetHitbox.Parent
                     local Distance = (Root.Position - TargetHitbox.Position).Magnitude
                     
                     if Distance > Config.AttackDistance then
                         -- Move towards rock
                         OrionLib:MakeNotification({
                             Name = "Farming",
-                            Content = "Moving to " .. TargetHitbox.Parent.Name,
+                            Content = "Moving to " .. RockModel.Name,
                             Time = 1
                         })
                         PathfindTo(TargetHitbox.Position)
                     else
                         -- Close enough to mine
-                        Char.Humanoid:MoveTo(Root.Position) -- Stop moving
+                        Char.Humanoid:MoveTo(Root.Position) -- Stop walking
                         
-                        -- Face the rock
-                        Root.CFrame = CFrame.new(Root.Position, Vector3.new(TargetHitbox.Position.X, Root.Position.Y, TargetHitbox.Position.Z))
-                        
-                        -- Mine loop
-                        local StuckCounter = 0
-                        while Config.AutoFarm and TargetHitbox.Parent and TargetHitbox.Parent.Parent do
+                        -- Mining Loop
+                        while Config.AutoFarm and RockModel and RockModel.Parent do
+                            
+                            -- 1. Check HP
+                            if IsRockBroken(RockModel) then
+                                break -- Go to next rock immediately
+                            end
+
+                            -- 2. Face the rock (3D LookAt to fix height issues)
+                            local LookPos = TargetHitbox.Position
+                            Root.CFrame = CFrame.new(Root.Position, LookPos)
+                            
+                            -- 3. Height Check (Jump if rock is high)
+                            if LookPos.Y > (Root.Position.Y + 3.5) then
+                                Char.Humanoid.Jump = true
+                            end
+
+                            -- 4. Swing
                             MineRock()
                             task.wait(Config.SwingDelay)
                             
-                            -- Verify we are still close
-                            if (Root.Position - TargetHitbox.Position).Magnitude > Config.AttackDistance + 5 then
-                                break 
+                            -- 5. Distance Check (in case we got pushed)
+                            if (Root.Position - TargetHitbox.Position).Magnitude > Config.AttackDistance + 4 then
+                                break -- Re-pathfind
                             end
                             
-                            -- Verify character is still alive
+                            -- 6. Character Check
                             if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then
                                 break
                             end
@@ -254,10 +276,9 @@ task.spawn(function()
                     end
                 else
                     -- No rocks found
-                    task.wait(1)
+                    task.wait(0.5)
                 end
             else
-                -- Character not found or dead, wait for respawn
                 task.wait(1)
             end
         end
