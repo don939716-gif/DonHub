@@ -32,10 +32,11 @@ Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 local CurrentTarget = nil 
 local CurrentAnimTrack = nil
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
+local LastWalkPastCheck = 0 -- Optimization for scanning
 
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
-    Title = "The Forge | Script Hub V13",
+    Title = "The Forge | Script Hub V14",
     SubTitle = "by DonHub",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
@@ -270,12 +271,11 @@ function PathfindTo(TargetHitbox)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
-    -- TUNED PATHFINDING
     local Path = PathfindingService:CreatePath({
-        AgentRadius = 2.5, -- Tuned to fit caves but avoid walls
+        AgentRadius = 3,
         AgentHeight = 5,
         AgentCanJump = true,
-        WaypointSpacing = 6, 
+        WaypointSpacing = 8, 
         Costs = { Water = 20 }
     })
 
@@ -291,11 +291,12 @@ function PathfindTo(TargetHitbox)
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
-            if not TargetHitbox or not TargetHitbox.Parent then return end -- Safety check
+            if not TargetHitbox or not TargetHitbox.Parent then return end
             if IsRockBroken(TargetHitbox) then return end
 
-            -- "Walk Past" Logic
-            if i % 3 == 0 then -- Optimization: Check every 3rd waypoint only
+            -- OPTIMIZED "Walk Past" Logic (Only checks once per second)
+            if tick() - LastWalkPastCheck > 1 then
+                LastWalkPastCheck = tick()
                 local DistToTarget = (Root.Position - TargetHitbox.Position).Magnitude
                 if DistToTarget > 20 then
                      local NearbyRock = GetClosestRock()
@@ -315,28 +316,36 @@ function PathfindTo(TargetHitbox)
                 Humanoid.Jump = true
             end
             
-            -- IMPROVED MOVEMENT LOOP
+            -- STABLE MOVEMENT LOOP
             local Timeout = 0
+            local StuckCheckTime = 0
+            local LastPos = Root.Position
+
             while Config.AutoFarm do
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
                 
                 -- Corner Cutting
-                if DistToWaypoint < 3 then break end
+                if DistToWaypoint < 4 then break end
                 
-                -- Fast Timeout (0.8s) - Prevents standing still
+                -- Timeout (Prevent infinite waiting)
                 Timeout = Timeout + 0.1
-                if Timeout > 0.8 then 
-                    -- If we are stuck for 0.8s, assume bad waypoint and skip
-                    Humanoid.Jump = true 
+                if Timeout > 1.5 then 
+                    -- Took too long for one waypoint, skip it
                     break 
                 end
 
-                -- Velocity Check (Anti-Wall Stuck)
-                local Velocity = Root.Velocity * Vector3.new(1,0,1) -- Ignore Y
-                if Velocity.Magnitude < 1 then
-                    -- We are trying to move but not moving
-                    Humanoid.Jump = true
-                    if Timeout > 0.4 then return end -- Abort path if really stuck
+                -- STUCK CHECK (Position Delta)
+                -- Only check every 0.5 seconds
+                StuckCheckTime = StuckCheckTime + 0.1
+                if StuckCheckTime > 0.5 then
+                    local MovedDist = (Root.Position - LastPos).Magnitude
+                    if MovedDist < 0.5 then
+                        -- We haven't moved in 0.5 seconds -> Stuck
+                        Humanoid.Jump = true
+                        if Timeout > 1.0 then return end -- Abort path if still stuck
+                    end
+                    LastPos = Root.Position
+                    StuckCheckTime = 0
                 end
 
                 -- Early Exit
@@ -348,9 +357,10 @@ function PathfindTo(TargetHitbox)
             end
         end
     else
-        -- Fallback
+        -- Fallback: Direct Move if pathfinding fails
         ManageRunState(true)
         Humanoid:MoveTo(TargetHitbox.Position)
+        task.wait(0.5) -- Give it a moment to try moving
     end
 end
 
@@ -358,7 +368,6 @@ end
 
 task.spawn(function()
     while true do
-        -- CRITICAL: Wrap in pcall to prevent thread death on error
         local Status, Error = pcall(function()
             if Config.AutoFarm then
                 local Char = GetCharacter()
@@ -385,11 +394,8 @@ task.spawn(function()
                         local Distance = (Root.Position - CurrentTarget.Position).Magnitude
                         
                         if Distance > Config.AttackDistance then
-                            Fluent:Notify({
-                                Title = "Farming",
-                                Content = "Running to " .. CurrentTarget.Parent.Name,
-                                Duration = 1
-                            })
+                            -- Only notify if target changed recently to avoid spam
+                            -- Fluent:Notify({Title = "Farming", Content = "Running...", Duration = 1})
                             PathfindTo(CurrentTarget)
                         else
                             ManageRunState(false)
@@ -437,10 +443,10 @@ task.spawn(function()
 
         if not Status then
             warn("AutoFarm Error: " .. tostring(Error))
-            task.wait(1) -- Wait before retrying to prevent spam
+            task.wait(1)
         end
         
-        task.wait() -- Main loop tick
+        task.wait()
     end
 end)
 
