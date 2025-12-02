@@ -6,7 +6,7 @@ local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -28,21 +28,51 @@ local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 --// STATE VARIABLES \\--
-local CurrentTarget = nil -- The rock we are currently locked onto
+local CurrentTarget = nil 
 local CurrentAnimTrack = nil
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
-    Title = "The Forge | Script Hub V11",
+    Title = "The Forge | Script Hub V12",
     SubTitle = "by DonHub",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
     Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
+    MinimizeKey = Enum.KeyCode.LeftControl -- PC Fallback
 })
 
+--// MOBILE TOGGLE BUTTON \\--
+local ScreenGui = Instance.new("ScreenGui")
+if run_secure_function then -- Synapse/Special Executors
+    run_secure_function(function() ScreenGui.Parent = CoreGui end)
+else
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Name = "ForgeHubToggle"
+ToggleBtn.Parent = ScreenGui
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Position = UDim2.new(0.5, -50, 0, 10) -- Top Center
+ToggleBtn.Size = UDim2.new(0, 100, 0, 40)
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.Text = "TOGGLE UI"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 14
+ToggleBtn.AutoButtonColor = true
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = ToggleBtn
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    Window:Minimize()
+end)
+
+--// TABS \\--
 local Tabs = {
     Farm = Window:AddTab({ Title = "Auto Farm", Icon = "pickaxe" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
@@ -68,7 +98,6 @@ local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
 })
 
 RockDropdown:OnChanged(function(Value)
-    -- Fluent returns a table like { ["Pebble"] = true, ["Rock"] = false }
     Config.SelectedRocks = {}
     for Name, Selected in pairs(Value) do
         if Selected then
@@ -86,7 +115,6 @@ FarmToggle:OnChanged(function(Value)
         if Value then
             print("Auto Farm Started")
         else
-            -- Reset everything when disabled
             CurrentTarget = nil
             ManageRunState(false)
             local Char = GetCharacter()
@@ -118,7 +146,6 @@ function EquipPickaxe()
     end
 end
 
--- Speed & Animation Manager
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
@@ -128,7 +155,6 @@ function ManageRunState(ShouldRun)
     if not Humanoid then return end
 
     if ShouldRun then
-        -- Force Speed
         if SpeedState.Humanoid ~= Humanoid or not SpeedState.IsRunning then
             if SpeedState.Connection then SpeedState.Connection:Disconnect() end
 
@@ -143,7 +169,6 @@ function ManageRunState(ShouldRun)
             SpeedState.IsRunning = true
         end
 
-        -- Play Animation
         if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then return end
 
         if Animator then
@@ -159,7 +184,6 @@ function ManageRunState(ShouldRun)
             end)
         end
     else
-        -- Stop Speed
         if SpeedState.Connection then
             SpeedState.Connection:Disconnect()
             SpeedState.Connection = nil
@@ -168,7 +192,6 @@ function ManageRunState(ShouldRun)
         SpeedState.Humanoid = nil
         Humanoid.WalkSpeed = Config.WalkSpeed
 
-        -- Stop Animation
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
@@ -209,13 +232,10 @@ function GetClosestRock()
     for _, Area in pairs(RocksFolder:GetChildren()) do
         for _, Container in pairs(Area:GetChildren()) do
             for _, Item in pairs(Container:GetChildren()) do
-                -- Check if name is in our selected list
                 if table.find(Config.SelectedRocks, Item.Name) and Item:FindFirstChild("Hitbox") then
                     local Hitbox = Item.Hitbox
-                    -- IMPORTANT: Don't select broken rocks
                     if not IsRockBroken(Hitbox) then
                         local Dist = (Root.Position - Hitbox.Position).Magnitude
-                        
                         if Dist < ClosestDist then
                             ClosestDist = Dist
                             ClosestRock = Hitbox
@@ -225,7 +245,6 @@ function GetClosestRock()
             end
         end
     end
-    
     return ClosestRock
 end
 
@@ -249,11 +268,12 @@ function PathfindTo(TargetHitbox)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
+    -- IMPROVED PATHFINDING PARAMS
     local Path = PathfindingService:CreatePath({
-        AgentRadius = 3,
+        AgentRadius = 4, -- Increased to keep away from walls
         AgentHeight = 5,
         AgentCanJump = true,
-        WaypointSpacing = 8,
+        WaypointSpacing = 6, -- Reduced for better cornering
         Costs = { Water = 20 }
     })
 
@@ -269,20 +289,15 @@ function PathfindTo(TargetHitbox)
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
-            
-            -- Stop if target is broken while moving
             if IsRockBroken(TargetHitbox) then return end
 
-            -- "Walk Past" Logic:
-            -- If we find a DIFFERENT rock that is very close while running, switch to it.
-            -- We only do this if we are NOT already close to our target.
+            -- "Walk Past" Logic (Only if far)
             local DistToTarget = (Root.Position - TargetHitbox.Position).Magnitude
             if DistToTarget > 20 then
                  local NearbyRock = GetClosestRock()
                  if NearbyRock and NearbyRock ~= TargetHitbox then
                      local DistToNearby = (Root.Position - NearbyRock.Position).Magnitude
                      if DistToNearby < Config.AttackDistance then
-                         -- We found a closer rock on the way! Switch target.
                          CurrentTarget = NearbyRock
                          return 
                      end
@@ -295,15 +310,36 @@ function PathfindTo(TargetHitbox)
                 Humanoid.Jump = true
             end
             
+            -- STUCK DETECTION & SMOOTH MOVE
             local Timeout = 0
+            local LastPos = Root.Position
+            local StuckTimer = 0
+
             while Config.AutoFarm do
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
-                if DistToWaypoint < 4 then break end
                 
+                -- Corner Cutting (Reduced to 3 for precision)
+                if DistToWaypoint < 3 then break end
+                
+                -- Timeout
                 Timeout = Timeout + 0.1
                 if Timeout > 2 then break end
 
-                -- Check if we reached the target early
+                -- Stuck Check
+                if (Root.Position - LastPos).Magnitude < 0.5 then
+                    StuckTimer = StuckTimer + 0.1
+                    if StuckTimer > 0.5 then
+                        Humanoid.Jump = true -- Try to jump out
+                        if StuckTimer > 1.5 then
+                             break -- Give up on this point
+                        end
+                    end
+                else
+                    StuckTimer = 0
+                end
+                LastPos = Root.Position
+
+                -- Early Exit
                 if (Root.Position - TargetHitbox.Position).Magnitude < Config.AttackDistance then
                     return
                 end
@@ -321,7 +357,7 @@ end
 
 task.spawn(function()
     while true do
-        task.wait() -- Main loop speed
+        task.wait()
         
         if Config.AutoFarm then
             local Char = GetCharacter()
@@ -329,33 +365,24 @@ task.spawn(function()
             if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") and Char.Humanoid.Health > 0 then
                 EquipPickaxe()
                 
-                -- 1. TARGET VALIDATION
-                -- If we have a target, check if it's still valid
                 if CurrentTarget then
                     if IsRockBroken(CurrentTarget) or not CurrentTarget.Parent then
-                        CurrentTarget = nil -- Target died, clear it
+                        CurrentTarget = nil
                     else
-                        -- Check if we somehow got too far from it (e.g. fell off cliff)
                         local Dist = (Char.HumanoidRootPart.Position - CurrentTarget.Position).Magnitude
-                        if Dist > 200 then 
-                            CurrentTarget = nil -- Abandon target if absurdly far
-                        end
+                        if Dist > 200 then CurrentTarget = nil end
                     end
                 end
 
-                -- 2. TARGET ACQUISITION
-                -- Only look for a new target if we don't have one
                 if not CurrentTarget then
                     CurrentTarget = GetClosestRock()
                 end
                 
-                -- 3. EXECUTION
                 if CurrentTarget then
                     local Root = Char.HumanoidRootPart
                     local Distance = (Root.Position - CurrentTarget.Position).Magnitude
                     
                     if Distance > Config.AttackDistance then
-                        -- RUNNING STATE
                         Fluent:Notify({
                             Title = "Farming",
                             Content = "Running to " .. CurrentTarget.Parent.Name,
@@ -363,23 +390,18 @@ task.spawn(function()
                         })
                         PathfindTo(CurrentTarget)
                     else
-                        -- MINING STATE
-                        ManageRunState(false) -- Stop running
-                        Char.Humanoid:MoveTo(Root.Position) -- Stop moving
+                        ManageRunState(false)
+                        Char.Humanoid:MoveTo(Root.Position)
                         
-                        -- Face Rock ONCE
                         local LookPos = CurrentTarget.Position
                         Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
                         
-                        -- Mine until broken or disabled
-                        -- We use a loop here to stay focused on THIS rock
                         while Config.AutoFarm and CurrentTarget and CurrentTarget.Parent do
                             if IsRockBroken(CurrentTarget) then
-                                CurrentTarget = nil -- Mark as done
+                                CurrentTarget = nil
                                 break 
                             end
 
-                            -- Anti-Twitch: Only correct angle if pushed significantly
                             local CurrentLook = Root.CFrame.LookVector
                             local TargetDir = (CurrentTarget.Position - Root.Position).Unit
                             local DotProduct = CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z
@@ -387,7 +409,6 @@ task.spawn(function()
                                 Root.CFrame = CFrame.new(Root.Position, Vector3.new(CurrentTarget.Position.X, Root.Position.Y, CurrentTarget.Position.Z))
                             end
 
-                            -- Jump if high
                             if CurrentTarget.Position.Y > (Root.Position.Y + 3.5) then
                                 Char.Humanoid.Jump = true
                             end
@@ -395,13 +416,11 @@ task.spawn(function()
                             MineRock()
                             task.wait(Config.SwingDelay)
                             
-                            -- Safety Checks
                             if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then break end
                             if (Root.Position - CurrentTarget.Position).Magnitude > Config.AttackDistance + 5 then break end
                         end
                     end
                 else
-                    -- No targets found
                     ManageRunState(false)
                     task.wait(0.5)
                 end
@@ -414,7 +433,6 @@ task.spawn(function()
     end
 end)
 
---// SAVE MANAGER \\--
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
