@@ -7,6 +7,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -34,19 +35,19 @@ local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
-    Title = "The Forge | Script Hub V12",
+    Title = "The Forge | Script Hub V13",
     SubTitle = "by DonHub",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
     Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl -- PC Fallback
+    MinimizeKey = Enum.KeyCode.LeftControl
 })
 
 --// MOBILE TOGGLE BUTTON \\--
 local ScreenGui = Instance.new("ScreenGui")
-if run_secure_function then -- Synapse/Special Executors
-    run_secure_function(function() ScreenGui.Parent = CoreGui end)
+if getgenv and getgenv().run_secure_function then 
+    getgenv().run_secure_function(function() ScreenGui.Parent = CoreGui end)
 else
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 end
@@ -56,7 +57,7 @@ ToggleBtn.Name = "ForgeHubToggle"
 ToggleBtn.Parent = ScreenGui
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 ToggleBtn.BorderSizePixel = 0
-ToggleBtn.Position = UDim2.new(0.5, -50, 0, 10) -- Top Center
+ToggleBtn.Position = UDim2.new(0.5, -50, 0, 10) 
 ToggleBtn.Size = UDim2.new(0, 100, 0, 40)
 ToggleBtn.Font = Enum.Font.GothamBold
 ToggleBtn.Text = "TOGGLE UI"
@@ -115,6 +116,7 @@ FarmToggle:OnChanged(function(Value)
         if Value then
             print("Auto Farm Started")
         else
+            -- CLEAN RESET
             CurrentTarget = nil
             ManageRunState(false)
             local Char = GetCharacter()
@@ -268,12 +270,12 @@ function PathfindTo(TargetHitbox)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
-    -- IMPROVED PATHFINDING PARAMS
+    -- TUNED PATHFINDING
     local Path = PathfindingService:CreatePath({
-        AgentRadius = 4, -- Increased to keep away from walls
+        AgentRadius = 2.5, -- Tuned to fit caves but avoid walls
         AgentHeight = 5,
         AgentCanJump = true,
-        WaypointSpacing = 6, -- Reduced for better cornering
+        WaypointSpacing = 6, 
         Costs = { Water = 20 }
     })
 
@@ -289,19 +291,22 @@ function PathfindTo(TargetHitbox)
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarm then break end
             if not Char or not Char.Parent then break end
+            if not TargetHitbox or not TargetHitbox.Parent then return end -- Safety check
             if IsRockBroken(TargetHitbox) then return end
 
-            -- "Walk Past" Logic (Only if far)
-            local DistToTarget = (Root.Position - TargetHitbox.Position).Magnitude
-            if DistToTarget > 20 then
-                 local NearbyRock = GetClosestRock()
-                 if NearbyRock and NearbyRock ~= TargetHitbox then
-                     local DistToNearby = (Root.Position - NearbyRock.Position).Magnitude
-                     if DistToNearby < Config.AttackDistance then
-                         CurrentTarget = NearbyRock
-                         return 
+            -- "Walk Past" Logic
+            if i % 3 == 0 then -- Optimization: Check every 3rd waypoint only
+                local DistToTarget = (Root.Position - TargetHitbox.Position).Magnitude
+                if DistToTarget > 20 then
+                     local NearbyRock = GetClosestRock()
+                     if NearbyRock and NearbyRock ~= TargetHitbox then
+                         local DistToNearby = (Root.Position - NearbyRock.Position).Magnitude
+                         if DistToNearby < Config.AttackDistance then
+                             CurrentTarget = NearbyRock
+                             return 
+                         end
                      end
-                 end
+                end
             end
 
             Humanoid:MoveTo(Waypoint.Position)
@@ -310,34 +315,29 @@ function PathfindTo(TargetHitbox)
                 Humanoid.Jump = true
             end
             
-            -- STUCK DETECTION & SMOOTH MOVE
+            -- IMPROVED MOVEMENT LOOP
             local Timeout = 0
-            local LastPos = Root.Position
-            local StuckTimer = 0
-
             while Config.AutoFarm do
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
                 
-                -- Corner Cutting (Reduced to 3 for precision)
+                -- Corner Cutting
                 if DistToWaypoint < 3 then break end
                 
-                -- Timeout
+                -- Fast Timeout (0.8s) - Prevents standing still
                 Timeout = Timeout + 0.1
-                if Timeout > 2 then break end
-
-                -- Stuck Check
-                if (Root.Position - LastPos).Magnitude < 0.5 then
-                    StuckTimer = StuckTimer + 0.1
-                    if StuckTimer > 0.5 then
-                        Humanoid.Jump = true -- Try to jump out
-                        if StuckTimer > 1.5 then
-                             break -- Give up on this point
-                        end
-                    end
-                else
-                    StuckTimer = 0
+                if Timeout > 0.8 then 
+                    -- If we are stuck for 0.8s, assume bad waypoint and skip
+                    Humanoid.Jump = true 
+                    break 
                 end
-                LastPos = Root.Position
+
+                -- Velocity Check (Anti-Wall Stuck)
+                local Velocity = Root.Velocity * Vector3.new(1,0,1) -- Ignore Y
+                if Velocity.Magnitude < 1 then
+                    -- We are trying to move but not moving
+                    Humanoid.Jump = true
+                    if Timeout > 0.4 then return end -- Abort path if really stuck
+                end
 
                 -- Early Exit
                 if (Root.Position - TargetHitbox.Position).Magnitude < Config.AttackDistance then
@@ -348,6 +348,7 @@ function PathfindTo(TargetHitbox)
             end
         end
     else
+        -- Fallback
         ManageRunState(true)
         Humanoid:MoveTo(TargetHitbox.Position)
     end
@@ -357,79 +358,89 @@ end
 
 task.spawn(function()
     while true do
-        task.wait()
-        
-        if Config.AutoFarm then
-            local Char = GetCharacter()
-            
-            if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") and Char.Humanoid.Health > 0 then
-                EquipPickaxe()
+        -- CRITICAL: Wrap in pcall to prevent thread death on error
+        local Status, Error = pcall(function()
+            if Config.AutoFarm then
+                local Char = GetCharacter()
                 
-                if CurrentTarget then
-                    if IsRockBroken(CurrentTarget) or not CurrentTarget.Parent then
-                        CurrentTarget = nil
-                    else
-                        local Dist = (Char.HumanoidRootPart.Position - CurrentTarget.Position).Magnitude
-                        if Dist > 200 then CurrentTarget = nil end
-                    end
-                end
-
-                if not CurrentTarget then
-                    CurrentTarget = GetClosestRock()
-                end
-                
-                if CurrentTarget then
-                    local Root = Char.HumanoidRootPart
-                    local Distance = (Root.Position - CurrentTarget.Position).Magnitude
+                if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") and Char.Humanoid.Health > 0 then
+                    EquipPickaxe()
                     
-                    if Distance > Config.AttackDistance then
-                        Fluent:Notify({
-                            Title = "Farming",
-                            Content = "Running to " .. CurrentTarget.Parent.Name,
-                            Duration = 1
-                        })
-                        PathfindTo(CurrentTarget)
-                    else
-                        ManageRunState(false)
-                        Char.Humanoid:MoveTo(Root.Position)
-                        
-                        local LookPos = CurrentTarget.Position
-                        Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
-                        
-                        while Config.AutoFarm and CurrentTarget and CurrentTarget.Parent do
-                            if IsRockBroken(CurrentTarget) then
-                                CurrentTarget = nil
-                                break 
-                            end
-
-                            local CurrentLook = Root.CFrame.LookVector
-                            local TargetDir = (CurrentTarget.Position - Root.Position).Unit
-                            local DotProduct = CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z
-                            if DotProduct < 0.5 then
-                                Root.CFrame = CFrame.new(Root.Position, Vector3.new(CurrentTarget.Position.X, Root.Position.Y, CurrentTarget.Position.Z))
-                            end
-
-                            if CurrentTarget.Position.Y > (Root.Position.Y + 3.5) then
-                                Char.Humanoid.Jump = true
-                            end
-
-                            MineRock()
-                            task.wait(Config.SwingDelay)
-                            
-                            if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then break end
-                            if (Root.Position - CurrentTarget.Position).Magnitude > Config.AttackDistance + 5 then break end
+                    -- Target Validation
+                    if CurrentTarget then
+                        if IsRockBroken(CurrentTarget) or not CurrentTarget.Parent then
+                            CurrentTarget = nil
+                        else
+                            local Dist = (Char.HumanoidRootPart.Position - CurrentTarget.Position).Magnitude
+                            if Dist > 200 then CurrentTarget = nil end
                         end
                     end
+
+                    if not CurrentTarget then
+                        CurrentTarget = GetClosestRock()
+                    end
+                    
+                    if CurrentTarget then
+                        local Root = Char.HumanoidRootPart
+                        local Distance = (Root.Position - CurrentTarget.Position).Magnitude
+                        
+                        if Distance > Config.AttackDistance then
+                            Fluent:Notify({
+                                Title = "Farming",
+                                Content = "Running to " .. CurrentTarget.Parent.Name,
+                                Duration = 1
+                            })
+                            PathfindTo(CurrentTarget)
+                        else
+                            ManageRunState(false)
+                            Char.Humanoid:MoveTo(Root.Position)
+                            
+                            local LookPos = CurrentTarget.Position
+                            Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
+                            
+                            while Config.AutoFarm and CurrentTarget and CurrentTarget.Parent do
+                                if IsRockBroken(CurrentTarget) then
+                                    CurrentTarget = nil
+                                    break 
+                                end
+
+                                local CurrentLook = Root.CFrame.LookVector
+                                local TargetDir = (CurrentTarget.Position - Root.Position).Unit
+                                local DotProduct = CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z
+                                if DotProduct < 0.5 then
+                                    Root.CFrame = CFrame.new(Root.Position, Vector3.new(CurrentTarget.Position.X, Root.Position.Y, CurrentTarget.Position.Z))
+                                end
+
+                                if CurrentTarget.Position.Y > (Root.Position.Y + 3.5) then
+                                    Char.Humanoid.Jump = true
+                                end
+
+                                MineRock()
+                                task.wait(Config.SwingDelay)
+                                
+                                if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then break end
+                                if (Root.Position - CurrentTarget.Position).Magnitude > Config.AttackDistance + 5 then break end
+                            end
+                        end
+                    else
+                        ManageRunState(false)
+                        task.wait(0.5)
+                    end
                 else
-                    ManageRunState(false)
-                    task.wait(0.5)
+                    task.wait(1)
                 end
             else
-                task.wait(1)
+                ManageRunState(false)
+                task.wait(0.5)
             end
-        else
-            ManageRunState(false)
+        end)
+
+        if not Status then
+            warn("AutoFarm Error: " .. tostring(Error))
+            task.wait(1) -- Wait before retrying to prevent spam
         end
+        
+        task.wait() -- Main loop tick
     end
 end)
 
