@@ -1,13 +1,13 @@
 --[[
-    THE FORGE - MAP EDITOR TOOL V2
+    THE FORGE - MAP EDITOR TOOL V3
     1. Create Mode (4 Points):
        - Click 1: Start Corner
-       - Click 2: End Corner (Sets Length, Angle, and Incline Up/Down)
-       - Click 3: Width (Drag mouse away to set width)
-       - Click 4: Thickness (Drag mouse to set thickness)
+       - Click 2: End Corner (Sets Length & Axis)
+       - Click 3: Width (Expands ONLY towards mouse)
+       - Click 4: Height (Expands ONLY towards mouse)
     2. Delete Mode:
-       - Hold SHIFT to highlight and delete entire connected structures of same material.
-    3. Export: Copies code to clipboard.
+       - Hold SHIFT for Radius Select (Matches Material + Color, ignores Size >= 50).
+    3. Toggle: Click button again to cancel.
 ]]
 
 local Players = game:GetService("Players")
@@ -33,11 +33,11 @@ SelectionFolder.Name = "SelectionHighlights"
 SelectionFolder.Parent = CoreGui
 
 local HoveredPart = nil
-local GroupParts = {} -- Stores parts found by flood fill
+local GroupParts = {} 
 
 --// UI SETUP \\--
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MapEditorToolV2"
+ScreenGui.Name = "MapEditorToolV3"
 ScreenGui.Parent = CoreGui
 
 local function CreateBtn(Text, Pos, Color, Callback)
@@ -67,19 +67,36 @@ StatusLabel.BackgroundColor3 = Color3.new(0,0,0)
 StatusLabel.TextColor3 = Color3.new(1,1,1)
 StatusLabel.Text = "Mode: None"
 
-local BtnCreate = CreateBtn("Create Ramp", UDim2.new(0, 10, 0.5, -60), Color3.fromRGB(0, 170, 0), function()
-    ToolMode = "Create"
-    CreateStep = 1
+--// RESET FUNCTION \\--
+local function ResetTool()
+    ToolMode = "None"
+    CreateStep = 0
     Points = {}
-    StatusLabel.Text = "Step 1: Click Start Corner"
     if TempPart then TempPart:Destroy() TempPart = nil end
     SelectionFolder:ClearAllChildren()
+    GroupParts = {}
+    StatusLabel.Text = "Mode: None"
+end
+
+local BtnCreate = CreateBtn("Create Ramp", UDim2.new(0, 10, 0.5, -60), Color3.fromRGB(0, 170, 0), function()
+    if ToolMode == "Create" then
+        ResetTool() -- Toggle Off
+    else
+        ResetTool()
+        ToolMode = "Create"
+        CreateStep = 1
+        StatusLabel.Text = "Step 1: Click Start Corner"
+    end
 end)
 
 local BtnDelete = CreateBtn("Delete Part", UDim2.new(0, 10, 0.5, -10), Color3.fromRGB(170, 0, 0), function()
-    ToolMode = "Delete"
-    StatusLabel.Text = "Mode: Delete (Hold SHIFT for Group)"
-    if TempPart then TempPart:Destroy() TempPart = nil end
+    if ToolMode == "Delete" then
+        ResetTool() -- Toggle Off
+    else
+        ResetTool()
+        ToolMode = "Delete"
+        StatusLabel.Text = "Mode: Delete (Hold SHIFT for Radius Group)"
+    end
 end)
 
 local BtnExport = CreateBtn("EXPORT", UDim2.new(0, 10, 0.5, 40), Color3.fromRGB(0, 100, 255), function()
@@ -135,30 +152,45 @@ local function HighlightPart(TargetPart)
     Box.Parent = SelectionFolder
 end
 
--- Recursive Flood Fill for Group Selection
+local function IsSafeToDelete(Part)
+    if not Part:IsA("BasePart") then return false end
+    if Part == workspace.Terrain then return false end
+    -- Size Safety Check (Ignore giant parts)
+    if Part.Size.X >= 50 or Part.Size.Y >= 50 or Part.Size.Z >= 50 then return false end
+    return true
+end
+
+-- Radius Flood Fill for Group Selection
 local function FindConnectedParts(StartPart)
+    if not IsSafeToDelete(StartPart) then return {} end
+
     local Found = {[StartPart] = true}
     local Queue = {StartPart}
     local Material = StartPart.Material
+    local Color = StartPart.Color -- Match Color too
     
-    local MaxSearch = 200 -- Safety limit to prevent freezing
+    local MaxSearch = 300 
     local Count = 0
+    local SearchRadius = 10 -- 10 Stud Radius
     
     while #Queue > 0 and Count < MaxSearch do
         local Current = table.remove(Queue, 1)
         Count = Count + 1
         
         local Params = OverlapParams.new()
-        Params.FilterDescendantsInstances = {Current}
+        Params.FilterDescendantsInstances = {Current} -- Don't check self
         Params.FilterType = Enum.RaycastFilterType.Exclude
         
-        -- Check slightly larger box to find touching parts
-        local PartsInBox = workspace:GetPartBoundsInBox(Current.CFrame, Current.Size + Vector3.new(0.2, 0.2, 0.2), Params)
+        -- Sphere overlap check
+        local PartsInRadius = workspace:GetPartBoundsInRadius(Current.Position, SearchRadius, Params)
         
-        for _, p in ipairs(PartsInBox) do
-            if p:IsA("BasePart") and p.Material == Material and not Found[p] and p ~= workspace.Terrain then
-                Found[p] = true
-                table.insert(Queue, p)
+        for _, p in ipairs(PartsInRadius) do
+            if IsSafeToDelete(p) and not Found[p] then
+                -- Check Material AND Color match
+                if p.Material == Material and p.Color == Color then
+                    Found[p] = true
+                    table.insert(Queue, p)
+                end
             end
         end
     end
@@ -174,14 +206,14 @@ RunService.RenderStepped:Connect(function()
         SelectionFolder:ClearAllChildren()
         local _, target = GetMouseHit()
         
-        if target and target ~= workspace.Terrain then
+        if target and IsSafeToDelete(target) then
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
                 -- Group Select
                 GroupParts = FindConnectedParts(target)
                 for _, p in ipairs(GroupParts) do
                     HighlightPart(p)
                 end
-                StatusLabel.Text = "Shift Held: " .. #GroupParts .. " connected parts selected."
+                StatusLabel.Text = "Shift Held: " .. #GroupParts .. " parts (Radius 10, Mat+Color Match)"
             else
                 -- Single Select
                 GroupParts = {target}
@@ -215,35 +247,41 @@ RunService.RenderStepped:Connect(function()
             TempPart.CFrame = CFrame.lookAt(Mid, P2)
             
         elseif CreateStep == 3 and Points[1] and Points[2] then
-            -- Step 3: Define Width (Expand X axis)
+            -- Step 3: Directional Width Expansion
             local P1 = Points[1]
             local P2 = Points[2]
             local MidLine = (P1 + P2) / 2
+            local BaseCF = CFrame.lookAt(MidLine, P2)
             
-            -- Calculate perpendicular distance for width
-            -- We project the mouse position onto the right vector of the line
-            local CF = CFrame.lookAt(MidLine, P2)
-            local RelPos = CF:PointToObjectSpace(hitPos)
-            local Width = math.abs(RelPos.X) * 2 -- *2 because we expand both ways from center
-            local Length = (P1 - P2).Magnitude
+            -- Convert mouse hit to object space relative to the line
+            local RelPos = BaseCF:PointToObjectSpace(hitPos)
+            local Width = math.abs(RelPos.X)
+            local Direction = math.sign(RelPos.X) -- -1 is left, 1 is right
             
-            TempPart.Size = Vector3.new(Width, 0.2, Length)
-            TempPart.CFrame = CF
+            -- Shift center so edge stays at line
+            local OffsetX = (Width / 2) * Direction
+            local NewCenter = BaseCF * CFrame.new(OffsetX, 0, 0)
+            
+            TempPart.Size = Vector3.new(Width, 0.2, (P1-P2).Magnitude)
+            TempPart.CFrame = NewCenter
             
         elseif CreateStep == 4 and Points[1] and Points[2] and Points[3] then
-            -- Step 4: Define Thickness (Expand Y axis)
+            -- Step 4: Directional Height Expansion
             local P1 = Points[1]
             local P2 = Points[2]
-            local Width = Points[3] -- Stored width value
-            local Length = (P1 - P2).Magnitude
-            local CF = CFrame.lookAt((P1 + P2)/2, P2)
+            local WidthData = Points[3] -- Contains {Width, CenterCF}
             
-            -- Calculate vertical distance relative to the part's rotation
-            local RelPos = CF:PointToObjectSpace(hitPos)
-            local Thickness = math.abs(RelPos.Y) * 2
+            local BaseCF = WidthData.CenterCF
+            local RelPos = BaseCF:PointToObjectSpace(hitPos)
+            local Height = math.abs(RelPos.Y)
+            local Direction = math.sign(RelPos.Y) -- -1 is down, 1 is up
             
-            TempPart.Size = Vector3.new(Width, Thickness, Length)
-            TempPart.CFrame = CF
+            -- Shift center so bottom/top stays at previous plane
+            local OffsetY = (Height / 2) * Direction
+            local NewCenter = BaseCF * CFrame.new(0, OffsetY, 0)
+            
+            TempPart.Size = Vector3.new(WidthData.Width, Height, (P1-P2).Magnitude)
+            TempPart.CFrame = NewCenter
         end
     end
 end)
@@ -259,23 +297,30 @@ UserInputService.InputBegan:Connect(function(input, gpe)
             if CreateStep == 1 then
                 Points[1] = hitPos
                 CreateStep = 2
-                StatusLabel.Text = "Step 2: Click End Corner (Sets Length & Incline)"
+                StatusLabel.Text = "Step 2: Click End Corner (Length/Incline)"
                 
             elseif CreateStep == 2 then
                 Points[2] = hitPos
                 CreateStep = 3
-                StatusLabel.Text = "Step 3: Drag mouse sideways for Width, then Click"
+                StatusLabel.Text = "Step 3: Click to set Width (Expands towards mouse)"
                 
             elseif CreateStep == 3 then
-                -- Store the width calculated in render loop
+                -- Store Width and the CFrame calculated in RenderStepped
+                -- We need to recalculate it exactly as the Render loop did to freeze it
                 local P1 = Points[1]
                 local P2 = Points[2]
-                local CF = CFrame.lookAt((P1 + P2)/2, P2)
-                local RelPos = CF:PointToObjectSpace(hitPos)
-                Points[3] = math.abs(RelPos.X) * 2 -- Store Width
+                local MidLine = (P1 + P2) / 2
+                local BaseCF = CFrame.lookAt(MidLine, P2)
+                local RelPos = BaseCF:PointToObjectSpace(hitPos)
+                local Width = math.abs(RelPos.X)
+                local Direction = math.sign(RelPos.X)
+                local OffsetX = (Width / 2) * Direction
+                local NewCenter = BaseCF * CFrame.new(OffsetX, 0, 0)
+                
+                Points[3] = {Width = Width, CenterCF = NewCenter}
                 
                 CreateStep = 4
-                StatusLabel.Text = "Step 4: Drag mouse up/down for Thickness, then Click"
+                StatusLabel.Text = "Step 4: Click to set Height (Expands towards mouse)"
                 
             elseif CreateStep == 4 then
                 -- Finalize
@@ -304,7 +349,6 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         elseif ToolMode == "Delete" then
             if #GroupParts > 0 then
                 for _, part in ipairs(GroupParts) do
-                    -- Generate path string
                     local path = "workspace"
                     local hierarchy = {}
                     local current = part
