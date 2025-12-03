@@ -1,8 +1,13 @@
 --[[
-    DonHub - Parry Timing Logger
+    DonHub - Parry Timing Logger V2
     Game: The Forge
     Author: Don
-    Usage: Run script -> Let mob hit you -> Copy timing -> Update Hub Config
+    
+    Instructions:
+    1. Run Script.
+    2. Let a mob hit you.
+    3. The script calculates the exact delay between the Sound and the Damage.
+    4. Click "Copy Table" and paste it into your Hub's ParryConfig.
 ]]
 
 local CoreGui = game:GetService("CoreGui")
@@ -12,9 +17,21 @@ local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
+--// CONFIGURATION \\--
+local TargetSounds = {
+    "Zombie Swing 1", "Zombie Swing 2", 
+    "Colossal Weapon Swing 1", "Colossal Weapon Swing 2", 
+    "Dagger Swing 1", "Dagger Swing 2", 
+    "Gauntlet Swing 1", "Gauntlet Swing 2", 
+    "Greataxe Swing 1", "Greataxe Swing 2", 
+    "Greatsword Swing 1", "Greatsword Swing 2", 
+    "Katana Swing 1", "Katana Swing 2", "Katana Swing 3", 
+    "Straight Swing 1", "Straight Swing 2"
+}
+
 --// UI CREATION \\--
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "DonHub_ParryLogger"
+ScreenGui.Name = "DonHub_ParryLogger_V2"
 if RunService:IsStudio() then
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 else
@@ -27,7 +44,7 @@ MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 MainFrame.BorderSizePixel = 0
 MainFrame.Position = UDim2.new(0.7, 0, 0.1, 0)
-MainFrame.Size = UDim2.new(0, 300, 0, 400)
+MainFrame.Size = UDim2.new(0, 320, 0, 400)
 MainFrame.Active = true
 MainFrame.Draggable = true
 
@@ -36,7 +53,7 @@ Title.Parent = MainFrame
 Title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 Title.Size = UDim2.new(1, 0, 0, 30)
 Title.Font = Enum.Font.GothamBold
-Title.Text = "Parry Timing Logger"
+Title.Text = "Parry Timing Logger V2"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 14
 
@@ -50,7 +67,7 @@ Scroll.ScrollBarThickness = 4
 
 local UIListLayout = Instance.new("UIListLayout")
 UIListLayout.Parent = Scroll
-UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.SortOrder = Enum.SortOrder.Name -- Sorts alphabetically by sound name
 UIListLayout.Padding = UDim.new(0, 5)
 
 UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
@@ -73,42 +90,57 @@ ClearBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 ClearBtn.Position = UDim2.new(0.55, 0, 1, -40)
 ClearBtn.Size = UDim2.new(0.45, 0, 0, 30)
 ClearBtn.Font = Enum.Font.GothamBold
-ClearBtn.Text = "Clear"
+ClearBtn.Text = "Reset"
 ClearBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 ClearBtn.TextSize = 14
 
 --// LOGIC VARIABLES \\--
-local Logs = {} -- Stores formatted strings
+local LoggedData = {} -- [SoundName] = {Time = 0.25, Label = Instance}
 local RecentSounds = {} -- { {Name, Time} }
 local MaxSoundAge = 2.0 -- Seconds to keep a sound in memory
 local OldHealth = 0
 
 --// FUNCTIONS \\--
 
-local function AddLog(SoundName, Delay)
+local function UpdateUI(SoundName, Delay)
     local FormattedDelay = string.format("%.3f", Delay)
-    local LogString = string.format("[\"%s\"] = %s,", SoundName, FormattedDelay)
     
-    table.insert(Logs, LogString)
-    
-    local Label = Instance.new("TextLabel")
-    Label.Parent = Scroll
-    Label.BackgroundTransparency = 1
-    Label.Size = UDim2.new(1, 0, 0, 20)
-    Label.Font = Enum.Font.Code
-    Label.Text = SoundName .. " : " .. FormattedDelay .. "s"
-    Label.TextColor3 = Color3.fromRGB(200, 200, 200)
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.TextSize = 12
-    
-    Scroll.CanvasPosition = Vector2.new(0, 9999)
+    if LoggedData[SoundName] then
+        -- Update Existing
+        LoggedData[SoundName].Time = Delay
+        LoggedData[SoundName].Label.Text = string.format("%s : %ss", SoundName, FormattedDelay)
+        
+        -- Flash effect to show update
+        task.spawn(function()
+            LoggedData[SoundName].Label.TextColor3 = Color3.fromRGB(0, 255, 0)
+            task.wait(0.2)
+            LoggedData[SoundName].Label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end)
+    else
+        -- Create New
+        local Label = Instance.new("TextLabel")
+        Label.Name = SoundName -- For sorting
+        Label.Parent = Scroll
+        Label.BackgroundTransparency = 1
+        Label.Size = UDim2.new(1, 0, 0, 20)
+        Label.Font = Enum.Font.Code
+        Label.Text = string.format("%s : %ss", SoundName, FormattedDelay)
+        Label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.TextSize = 12
+        
+        LoggedData[SoundName] = {
+            Time = Delay,
+            Label = Label
+        }
+    end
 end
 
 local function MonitorMob(Mob)
     if not Mob:FindFirstChild("HumanoidRootPart") then return end
     
     Mob.HumanoidRootPart.ChildAdded:Connect(function(Child)
-        if Child:IsA("Sound") then
+        if Child:IsA("Sound") and table.find(TargetSounds, Child.Name) then
             table.insert(RecentSounds, {
                 Name = Child.Name,
                 Time = os.clock()
@@ -122,7 +154,7 @@ end
 -- 1. Listen for Damage (The "Hit")
 task.spawn(function()
     while true do
-        task.wait(0.1)
+        task.wait() -- Fast check
         local Char = LocalPlayer.Character
         if Char and Char:FindFirstChild("Humanoid") then
             local Hum = Char.Humanoid
@@ -140,6 +172,8 @@ task.spawn(function()
                     local SoundData = RecentSounds[i]
                     local Diff = HitTime - SoundData.Time
                     
+                    -- We look for sounds that happened BEFORE the hit (Diff > 0)
+                    -- But not too long ago
                     if Diff > 0 and Diff < ShortestDiff then
                         ShortestDiff = Diff
                         BestMatch = SoundData
@@ -147,8 +181,11 @@ task.spawn(function()
                 end
                 
                 if BestMatch then
-                    AddLog(BestMatch.Name, ShortestDiff)
-                    -- Clear recent sounds to prevent double logging
+                    -- Subtract a tiny buffer (0.05) to ensure block starts slightly before hit
+                    -- But keep it raw for the logger so you see the exact delay
+                    UpdateUI(BestMatch.Name, ShortestDiff)
+                    
+                    -- Clear recent sounds to prevent double logging the same swing
                     RecentSounds = {} 
                 end
             end
@@ -189,15 +226,22 @@ end)
 --// BUTTONS \\--
 
 CopyBtn.MouseButton1Click:Connect(function()
-    local Result = table.concat(Logs, "\n")
+    local Lines = {}
+    for Name, Data in pairs(LoggedData) do
+        -- Format: ["Sound Name"] = 0.123,
+        table.insert(Lines, string.format("    [\"%s\"] = %.3f,", Name, Data.Time))
+    end
+    
+    local Result = table.concat(Lines, "\n")
     setclipboard(Result)
-    CopyBtn.Text = "Copied!"
+    
+    CopyBtn.Text = "Copied to Clipboard!"
     task.wait(1)
     CopyBtn.Text = "Copy Table"
 end)
 
 ClearBtn.MouseButton1Click:Connect(function()
-    Logs = {}
+    LoggedData = {}
     for _, child in pairs(Scroll:GetChildren()) do
         if child:IsA("TextLabel") then child:Destroy() end
     end
