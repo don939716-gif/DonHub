@@ -1,6 +1,6 @@
 --[[
     DonHub - The Forge Script Hub
-    Version: v1.0.0
+    Version: v1.0.1
     Author: Don
     License: Private
 ]]
@@ -69,132 +69,7 @@ local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 local IsParrying = false
 local ActiveMobConnections = {} -- [Model] = Connection
 
---// UI SETUP \\--
-local Window = Fluent:CreateWindow({
-    Title = "DonHub | The Forge",
-    SubTitle = "v1.0.0",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
-})
-
-local Tabs = {
-    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
-    Farm = Window:AddTab({ Title = "Rock Farm", Icon = "pickaxe" }),
-    MobFarm = Window:AddTab({ Title = "Mob Farm", Icon = "sword" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
-}
-
---// MOBILE TOGGLE BUTTON \\--
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "DonHub_MobileToggle"
-if RunService:IsStudio() then
-    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-else
-    ScreenGui.Parent = CoreGui
-end
-
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Name = "Toggle"
-ToggleBtn.Parent = ScreenGui
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-ToggleBtn.BorderSizePixel = 0
-ToggleBtn.Position = UDim2.new(0.85, 0, 0.8, 0)
-ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.Text = "UI"
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.TextSize = 18
-ToggleBtn.AutoButtonColor = true
-
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 10)
-UICorner.Parent = ToggleBtn
-
-ToggleBtn.MouseButton1Click:Connect(function()
-    Window:Minimize()
-end)
-
---// DATA LOADING \\--
-
--- 1. Get Rock Names
-local RockOptions = {}
-local RocksAssetFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Rocks")
-for _, rock in pairs(RocksAssetFolder:GetChildren()) do
-    table.insert(RockOptions, rock.Name)
-end
-table.sort(RockOptions)
-
--- 2. Get Mob Names
-local MobOptions = {}
-local MobsAssetFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Mobs")
-for _, mob in pairs(MobsAssetFolder:GetChildren()) do
-    if mob.Name ~= "Zombie3" then -- Filter out Zombie3 as requested
-        table.insert(MobOptions, mob.Name)
-    end
-end
-table.sort(MobOptions)
-
---// UI ELEMENTS \\--
-
--- ROCK FARM TAB
-local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
-    Title = "Select Rocks",
-    Description = "Select rocks to mine.",
-    Values = RockOptions,
-    Multi = true,
-    Default = {},
-})
-
-RockDropdown:OnChanged(function(Value)
-    Config.SelectedRocks = {}
-    for Name, Selected in pairs(Value) do
-        if Selected then table.insert(Config.SelectedRocks, Name) end
-    end
-end)
-
-local RockFarmToggle = Tabs.Farm:AddToggle("AutoFarmRocks", {Title = "Enable Rock Farm", Default = false })
-RockFarmToggle:OnChanged(function(Value)
-    Config.AutoFarmRocks = Value
-    if Value then Config.AutoFarmMobs = false end -- Mutually exclusive
-    ResetFarmState()
-end)
-
--- MOB FARM TAB
-local MobDropdown = Tabs.MobFarm:AddDropdown("MobSelection", {
-    Title = "Select Mobs",
-    Description = "Select mobs to hunt.",
-    Values = MobOptions,
-    Multi = true,
-    Default = {},
-})
-
-MobDropdown:OnChanged(function(Value)
-    Config.SelectedMobs = {}
-    for Name, Selected in pairs(Value) do
-        if Selected then table.insert(Config.SelectedMobs, Name) end
-    end
-end)
-
-local MobFarmToggle = Tabs.MobFarm:AddToggle("AutoFarmMobs", {Title = "Enable Mob Farm", Default = false })
-MobFarmToggle:OnChanged(function(Value)
-    Config.AutoFarmMobs = Value
-    if Value then Config.AutoFarmRocks = false end -- Mutually exclusive
-    ResetFarmState()
-end)
-
---// HELPER FUNCTIONS \\--
-
-function ResetFarmState()
-    CurrentTarget = nil
-    ManageRunState(false)
-    local Char = GetCharacter()
-    if Char and Char:FindFirstChild("Humanoid") then
-        Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
-    end
-end
+--// HELPER FUNCTIONS (DEFINED FIRST TO PREVENT ERRORS) \\--
 
 function GetCharacter()
     if Workspace:FindFirstChild("Living") then
@@ -207,17 +82,6 @@ end
 function CleanMobName(Name)
     -- Removes trailing numbers (e.g., "Brute Zombie379721" -> "Brute Zombie")
     return string.gsub(Name, "%d+$", "")
-end
-
-function EquipTool(ToolName)
-    local Char = GetCharacter()
-    if not Char then return end
-    if Char:FindFirstChild(ToolName) then return end
-
-    local Backpack = LocalPlayer:FindFirstChild("Backpack")
-    if Backpack and Backpack:FindFirstChild(ToolName) then
-        Backpack[ToolName].Parent = Char
-    end
 end
 
 -- Speed & Animation Manager
@@ -278,7 +142,25 @@ function ManageRunState(ShouldRun)
     end
 end
 
---// COMBAT & MINING LOGIC \\--
+function ResetFarmState()
+    CurrentTarget = nil
+    ManageRunState(false)
+    local Char = GetCharacter()
+    if Char and Char:FindFirstChild("Humanoid") then
+        Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
+    end
+end
+
+function EquipTool(ToolName)
+    local Char = GetCharacter()
+    if not Char then return end
+    if Char:FindFirstChild(ToolName) then return end
+
+    local Backpack = LocalPlayer:FindFirstChild("Backpack")
+    if Backpack and Backpack:FindFirstChild(ToolName) then
+        Backpack[ToolName].Parent = Char
+    end
+end
 
 function IsRockBroken(Hitbox)
     if not Hitbox or not Hitbox.Parent then return true end
@@ -469,6 +351,128 @@ function PathfindTo(TargetPart)
     end
 end
 
+--// UI SETUP \\--
+local Window = Fluent:CreateWindow({
+    Title = "DonHub | The Forge",
+    SubTitle = "v1.0.1",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+local Tabs = {
+    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
+    Farm = Window:AddTab({ Title = "Rock Farm", Icon = "pickaxe" }),
+    MobFarm = Window:AddTab({ Title = "Mob Farm", Icon = "sword" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+--// MOBILE TOGGLE BUTTON \\--
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "DonHub_MobileToggle"
+if RunService:IsStudio() then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+else
+    ScreenGui.Parent = CoreGui
+end
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Name = "Toggle"
+ToggleBtn.Parent = ScreenGui
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Position = UDim2.new(0.85, 0, 0.8, 0)
+ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.Text = "UI"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 18
+ToggleBtn.AutoButtonColor = true
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 10)
+UICorner.Parent = ToggleBtn
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    Window:Minimize()
+end)
+
+--// DATA LOADING \\--
+
+-- 1. Get Rock Names
+local RockOptions = {}
+local RocksAssetFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Rocks")
+for _, rock in pairs(RocksAssetFolder:GetChildren()) do
+    table.insert(RockOptions, rock.Name)
+end
+table.sort(RockOptions)
+
+-- 2. Get Mob Names
+local MobOptions = {}
+local MobsAssetFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Mobs")
+for _, mob in pairs(MobsAssetFolder:GetChildren()) do
+    if mob.Name ~= "Zombie3" then -- Filter out Zombie3 as requested
+        table.insert(MobOptions, mob.Name)
+    end
+end
+table.sort(MobOptions)
+
+--// UI ELEMENTS \\--
+
+-- MAIN TAB
+Tabs.Main:AddParagraph({
+    Title = "Welcome to DonHub",
+    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Always Active)\n- Mobile Support"
+})
+
+-- ROCK FARM TAB
+local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
+    Title = "Select Rocks",
+    Description = "Select rocks to mine.",
+    Values = RockOptions,
+    Multi = true,
+    Default = {},
+})
+
+RockDropdown:OnChanged(function(Value)
+    Config.SelectedRocks = {}
+    for Name, Selected in pairs(Value) do
+        if Selected then table.insert(Config.SelectedRocks, Name) end
+    end
+end)
+
+local RockFarmToggle = Tabs.Farm:AddToggle("AutoFarmRocks", {Title = "Enable Rock Farm", Default = false })
+RockFarmToggle:OnChanged(function(Value)
+    Config.AutoFarmRocks = Value
+    if Value then Config.AutoFarmMobs = false end -- Mutually exclusive
+    ResetFarmState()
+end)
+
+-- MOB FARM TAB
+local MobDropdown = Tabs.MobFarm:AddDropdown("MobSelection", {
+    Title = "Select Mobs",
+    Description = "Select mobs to hunt.",
+    Values = MobOptions,
+    Multi = true,
+    Default = {},
+})
+
+MobDropdown:OnChanged(function(Value)
+    Config.SelectedMobs = {}
+    for Name, Selected in pairs(Value) do
+        if Selected then table.insert(Config.SelectedMobs, Name) end
+    end
+end)
+
+local MobFarmToggle = Tabs.MobFarm:AddToggle("AutoFarmMobs", {Title = "Enable Mob Farm", Default = false })
+MobFarmToggle:OnChanged(function(Value)
+    Config.AutoFarmMobs = Value
+    if Value then Config.AutoFarmRocks = false end -- Mutually exclusive
+    ResetFarmState()
+end)
+
 --// PARRY SYSTEM \\--
 
 task.spawn(function()
@@ -653,6 +657,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub",
-    Content = "Loaded v1.0.0 Successfully!",
+    Content = "Loaded v1.0.1 Successfully!",
     Duration = 5
 })
