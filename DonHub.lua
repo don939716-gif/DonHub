@@ -1,378 +1,554 @@
---[[
-    THE FORGE - MAP EDITOR TOOL V3
-    1. Create Mode (4 Points):
-       - Click 1: Start Corner
-       - Click 2: End Corner (Sets Length & Axis)
-       - Click 3: Width (Expands ONLY towards mouse)
-       - Click 4: Height (Expands ONLY towards mouse)
-    2. Delete Mode:
-       - Hold SHIFT for Radius Select (Matches Material + Color, ignores Size >= 50).
-    3. Toggle: Click button again to cancel.
-]]
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
+local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local CoreGui = game:GetService("CoreGui")
-local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
 
---// DATA STORAGE \\--
-local CreatedParts = {} 
-local DeletedPaths = {} 
+--// CONFIGURATION \\--
+local Config = {
+    AutoFarmRocks = false,
+    AutoFarmMobs = false,
+    SelectedRocks = {},
+    SelectedMobs = {},
+    AttackDistance = 7,
+    SwingDelay = 0.3,
+    RunSpeed = 21.69,
+    WalkSpeed = 11.79,
+    
+    -- Parry Configuration
+    ParryEnabled = true,
+    ParryDelay = 0.25, -- Time between sound detection and blocking
+    BlockDuration = 0.25, -- How long to hold block
+    ParryDistance = 10 -- Max distance to react to sounds
+}
 
---// STATE \\--
-local ToolMode = "None"
-local CreateStep = 0
-local Points = {}
-local TempPart = nil
-local SelectionFolder = Instance.new("Folder")
-SelectionFolder.Name = "SelectionHighlights"
-SelectionFolder.Parent = CoreGui
+--// PARRY SOUND LIST \\--
+local ParrySounds = {
+    "Zombie Swing 1", "Zombie Swing 2", 
+    "Colossal Weapon Swing 1", "Colossal Weapon Swing 2", 
+    "Dagger Swing 1", "Dagger Swing 2", 
+    "Gauntlet Swing 1", "Gauntlet Swing 2", 
+    "Greataxe Swing 1", "Greataxe Swing 2", 
+    "Greatsword Swing 1", "Greatsword Swing 2", 
+    "Katana Swing 1", "Katana Swing 2", "Katana Swing 3", 
+    "Straight Swing 1", "Straight Swing 2"
+}
 
-local HoveredPart = nil
-local GroupParts = {} 
+--// ANIMATION ASSETS \\--
+local Anim_RunDefault = Instance.new("Animation")
+Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
+
+local Anim_RunPickaxe = Instance.new("Animation") -- Also used for Weapon run
+Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
+
+--// STATE VARIABLES \\--
+local CurrentTarget = nil 
+local CurrentAnimTrack = nil
+local IsParrying = false -- Global flag to pause movement
+local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
+local MobileButton = nil
 
 --// UI SETUP \\--
+local Window = Fluent:CreateWindow({
+    Title = "The Forge | Script Hub V12",
+    SubTitle = "by DonHub",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+local Tabs = {
+    Farm = Window:AddTab({ Title = "Auto Farm", Icon = "pickaxe" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+--// ASSET LOADING \\--
+local RockOptions = {}
+local MobOptions = {}
+
+local Assets = ReplicatedStorage:WaitForChild("Assets")
+if Assets:FindFirstChild("Rocks") then
+    for _, rock in pairs(Assets.Rocks:GetChildren()) do table.insert(RockOptions, rock.Name) end
+end
+if Assets:FindFirstChild("Mobs") then
+    for _, mob in pairs(Assets.Mobs:GetChildren()) do table.insert(MobOptions, mob.Name) end
+end
+
+table.sort(RockOptions)
+table.sort(MobOptions)
+
+--// MOBILE TOGGLE BUTTON \\--
+if CoreGui:FindFirstChild("ForgeHubMobileButton") then
+    CoreGui.ForgeHubMobileButton:Destroy()
+end
+
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MapEditorToolV3"
+ScreenGui.Name = "ForgeHubMobileButton"
 ScreenGui.Parent = CoreGui
 
-local function CreateBtn(Text, Pos, Color, Callback)
-    local Btn = Instance.new("TextButton")
-    Btn.Parent = ScreenGui
-    Btn.Size = UDim2.new(0, 100, 0, 40)
-    Btn.Position = Pos
-    Btn.BackgroundColor3 = Color
-    Btn.Text = Text
-    Btn.TextColor3 = Color3.new(1,1,1)
-    Btn.Font = Enum.Font.GothamBold
-    Btn.TextSize = 14
-    
-    local UICorner = Instance.new("UICorner")
-    UICorner.Parent = Btn
-    
-    Btn.MouseButton1Click:Connect(Callback)
-    return Btn
-end
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Parent = ScreenGui
+ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
+ToggleBtn.Position = UDim2.new(0.9, 0, 0.3, 0)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Text = "UI"
+ToggleBtn.UICorner = Instance.new("UICorner", ToggleBtn)
+ToggleBtn.UICorner.CornerRadius = UDim.new(1, 0)
+ToggleBtn.Draggable = true
 
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Parent = ScreenGui
-StatusLabel.Size = UDim2.new(0, 400, 0, 30)
-StatusLabel.Position = UDim2.new(0.5, -200, 0, 10)
-StatusLabel.BackgroundTransparency = 0.5
-StatusLabel.BackgroundColor3 = Color3.new(0,0,0)
-StatusLabel.TextColor3 = Color3.new(1,1,1)
-StatusLabel.Text = "Mode: None"
+ToggleBtn.MouseButton1Click:Connect(function()
+    -- Fluent specific toggle logic (simulating MinimizeKey)
+    local virtualInput = game:GetService("VirtualInputManager")
+    virtualInput:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+    virtualInput:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
+end)
 
---// RESET FUNCTION \\--
-local function ResetTool()
-    ToolMode = "None"
-    CreateStep = 0
-    Points = {}
-    if TempPart then TempPart:Destroy() TempPart = nil end
-    SelectionFolder:ClearAllChildren()
-    GroupParts = {}
-    StatusLabel.Text = "Mode: None"
-end
+MobileButton = ScreenGui
 
-local BtnCreate = CreateBtn("Create Ramp", UDim2.new(0, 10, 0.5, -60), Color3.fromRGB(0, 170, 0), function()
-    if ToolMode == "Create" then
-        ResetTool() -- Toggle Off
-    else
-        ResetTool()
-        ToolMode = "Create"
-        CreateStep = 1
-        StatusLabel.Text = "Step 1: Click Start Corner"
+--// UI ELEMENTS \\--
+
+-- ROCKS SECTION
+local RockSection = Tabs.Farm:AddSection("Rock Mining")
+
+local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
+    Title = "Select Rocks",
+    Values = RockOptions,
+    Multi = true,
+    Default = {},
+})
+
+RockDropdown:OnChanged(function(Value)
+    Config.SelectedRocks = {}
+    for Name, Selected in pairs(Value) do
+        if Selected then table.insert(Config.SelectedRocks, Name) end
     end
 end)
 
-local BtnDelete = CreateBtn("Delete Part", UDim2.new(0, 10, 0.5, -10), Color3.fromRGB(170, 0, 0), function()
-    if ToolMode == "Delete" then
-        ResetTool() -- Toggle Off
-    else
-        ResetTool()
-        ToolMode = "Delete"
-        StatusLabel.Text = "Mode: Delete (Hold SHIFT for Radius Group)"
+Tabs.Farm:AddToggle("AutoFarmRocks", {Title = "Enable Rock Farm", Default = false }):OnChanged(function(Value)
+    Config.AutoFarmRocks = Value
+    Config.AutoFarmMobs = false -- Mutual exclusion for safety
+    ResetFarm()
+end)
+
+-- MOBS SECTION
+local MobSection = Tabs.Farm:AddSection("Mob Farming")
+
+local MobDropdown = Tabs.Farm:AddDropdown("MobSelection", {
+    Title = "Select Mobs",
+    Values = MobOptions,
+    Multi = true,
+    Default = {},
+})
+
+MobDropdown:OnChanged(function(Value)
+    Config.SelectedMobs = {}
+    for Name, Selected in pairs(Value) do
+        if Selected then table.insert(Config.SelectedMobs, Name) end
     end
 end)
 
-local BtnExport = CreateBtn("EXPORT", UDim2.new(0, 10, 0.5, 40), Color3.fromRGB(0, 100, 255), function()
-    local Output = "--// MAP FIXES \\--\n\n"
-    
-    Output = Output .. "-- Deleted Parts\n"
-    for _, path in ipairs(DeletedPaths) do
-        Output = Output .. "pcall(function() " .. path .. ":Destroy() end)\n"
-    end
-    
-    Output = Output .. "\n-- Created Parts\n"
-    for _, data in ipairs(CreatedParts) do
-        Output = Output .. "local p = Instance.new('Part')\n"
-        Output = Output .. "p.Anchored = true\n"
-        Output = Output .. "p.CanCollide = true\n"
-        Output = Output .. "p.Transparency = 0.5\n"
-        Output = Output .. "p.Color = Color3.fromRGB(0, 255, 0)\n"
-        Output = Output .. "p.Material = Enum.Material.SmoothPlastic\n"
-        Output = Output .. string.format("p.Size = Vector3.new(%.4f, %.4f, %.4f)\n", data.Size.X, data.Size.Y, data.Size.Z)
-        Output = Output .. string.format("p.CFrame = CFrame.new(%.4f, %.4f, %.4f) * CFrame.Angles(%.4f, %.4f, %.4f)\n", 
-            data.Pos.X, data.Pos.Y, data.Pos.Z, data.Rot.X, data.Rot.Y, data.Rot.Z)
-        Output = Output .. "p.Parent = workspace\n\n"
-    end
-    
-    if setclipboard then
-        setclipboard(Output)
-        StatusLabel.Text = "Copied to Clipboard!"
-    else
-        print(Output)
-        StatusLabel.Text = "Copied to Console (F9)"
-    end
-    task.wait(2)
-    StatusLabel.Text = "Mode: " .. ToolMode
+Tabs.Farm:AddToggle("AutoFarmMobs", {Title = "Enable Mob Farm", Default = false }):OnChanged(function(Value)
+    Config.AutoFarmMobs = Value
+    Config.AutoFarmRocks = false -- Mutual exclusion
+    ResetFarm()
 end)
 
 --// HELPER FUNCTIONS \\--
 
-local function GetMouseHit()
-    local mouseLocation = UserInputService:GetMouseLocation()
-    local ray = workspace.CurrentCamera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
-    local result = workspace:Raycast(ray.Origin, ray.Direction * 2000)
-    if result then
-        return result.Position, result.Instance
+function ResetFarm()
+    CurrentTarget = nil
+    ManageRunState(false)
+    local Char = GetCharacter()
+    if Char and Char:FindFirstChild("Humanoid") then
+        Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
     end
-    return Mouse.Hit.Position, Mouse.Target
 end
 
-local function HighlightPart(TargetPart)
-    local Box = Instance.new("SelectionBox")
-    Box.Color3 = Color3.fromRGB(255, 0, 0)
-    Box.LineThickness = 0.05
-    Box.Adornee = TargetPart
-    Box.Parent = SelectionFolder
+function GetCharacter()
+    if Workspace:FindFirstChild("Living") then
+        local LivingChar = Workspace.Living:FindFirstChild(LocalPlayer.Name)
+        if LivingChar then return LivingChar end
+    end
+    return LocalPlayer.Character
 end
 
-local function IsSafeToDelete(Part)
-    if not Part:IsA("BasePart") then return false end
-    if Part == workspace.Terrain then return false end
-    -- Size Safety Check (Ignore giant parts)
-    if Part.Size.X >= 50 or Part.Size.Y >= 50 or Part.Size.Z >= 50 then return false end
-    return true
+function EquipTool(ToolName)
+    local Char = GetCharacter()
+    if not Char then return end
+    if Char:FindFirstChild(ToolName) then return end
+
+    local Backpack = LocalPlayer:FindFirstChild("Backpack")
+    if Backpack and Backpack:FindFirstChild(ToolName) then
+        Backpack[ToolName].Parent = Char
+    end
 end
 
--- Radius Flood Fill for Group Selection
-local function FindConnectedParts(StartPart)
-    if not IsSafeToDelete(StartPart) then return {} end
-
-    local Found = {[StartPart] = true}
-    local Queue = {StartPart}
-    local Material = StartPart.Material
-    local Color = StartPart.Color -- Match Color too
+-- Speed & Animation Manager
+function ManageRunState(ShouldRun)
+    local Char = GetCharacter()
+    if not Char then return end
+    local Humanoid = Char:FindFirstChild("Humanoid")
+    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
     
-    local MaxSearch = 300 
-    local Count = 0
-    local SearchRadius = 10 -- 10 Stud Radius
+    if not Humanoid then return end
+
+    -- Pause speed enforcement if parrying
+    if IsParrying then
+        if SpeedState.Connection then SpeedState.Connection:Disconnect() SpeedState.Connection = nil end
+        Humanoid.WalkSpeed = 0 -- Anchor for block
+        return
+    end
+
+    if ShouldRun then
+        if SpeedState.Humanoid ~= Humanoid or not SpeedState.IsRunning then
+            if SpeedState.Connection then SpeedState.Connection:Disconnect() end
+            local function EnforceSpeed()
+                if not IsParrying and Humanoid.WalkSpeed ~= Config.RunSpeed then
+                    Humanoid.WalkSpeed = Config.RunSpeed
+                end
+            end
+            EnforceSpeed()
+            SpeedState.Connection = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(EnforceSpeed)
+            SpeedState.Humanoid = Humanoid
+            SpeedState.IsRunning = true
+        end
+
+        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then return end
+        if Animator then
+            local AnimationToLoad = Anim_RunDefault
+            if Char:FindFirstChild("Pickaxe") or Char:FindFirstChild("Weapon") then
+                AnimationToLoad = Anim_RunPickaxe
+            end
+            pcall(function()
+                CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
+                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
+                CurrentAnimTrack.Looped = true
+                CurrentAnimTrack:Play()
+            end)
+        end
+    else
+        if SpeedState.Connection then
+            SpeedState.Connection:Disconnect()
+            SpeedState.Connection = nil
+        end
+        SpeedState.IsRunning = false
+        SpeedState.Humanoid = nil
+        Humanoid.WalkSpeed = Config.WalkSpeed
+
+        if CurrentAnimTrack then
+            CurrentAnimTrack:Stop()
+            CurrentAnimTrack = nil
+        end
+    end
+end
+
+--// AUTO PARRY LOGIC \\--
+
+function PerformParry()
+    if IsParrying then return end
+    IsParrying = true
     
-    while #Queue > 0 and Count < MaxSearch do
-        local Current = table.remove(Queue, 1)
-        Count = Count + 1
+    local Char = GetCharacter()
+    if Char and Char:FindFirstChild("Humanoid") then
+        Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position) -- Stop Moving
+        Char.Humanoid.WalkSpeed = 0 -- Force Stop
+    end
+
+    task.spawn(function()
+        task.wait(Config.ParryDelay)
         
-        local Params = OverlapParams.new()
-        Params.FilterDescendantsInstances = {Current} -- Don't check self
-        Params.FilterType = Enum.RaycastFilterType.Exclude
+        -- Start Block
+        game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StartBlock:InvokeServer()
         
-        -- Sphere overlap check
-        local PartsInRadius = workspace:GetPartBoundsInRadius(Current.Position, SearchRadius, Params)
+        task.wait(Config.BlockDuration)
         
-        for _, p in ipairs(PartsInRadius) do
-            if IsSafeToDelete(p) and not Found[p] then
-                -- Check Material AND Color match
-                if p.Material == Material and p.Color == Color then
-                    Found[p] = true
-                    table.insert(Queue, p)
+        -- Stop Block
+        game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StopBlock:InvokeServer()
+        
+        IsParrying = false
+        -- Speed will be reset by ManageRunState loop
+    end)
+end
+
+function SetupMobListener(Mob)
+    if not Mob:IsA("Model") then return end
+    -- Filter Players
+    if Players:GetPlayerFromCharacter(Mob) then return end
+    
+    local Root = Mob:WaitForChild("HumanoidRootPart", 5)
+    if not Root then return end
+
+    Root.ChildAdded:Connect(function(Child)
+        if not Config.ParryEnabled then return end
+        
+        -- Check if sound matches list
+        if table.find(ParrySounds, Child.Name) then
+            local Char = GetCharacter()
+            if Char and Char:FindFirstChild("HumanoidRootPart") then
+                local Dist = (Char.HumanoidRootPart.Position - Root.Position).Magnitude
+                if Dist <= Config.ParryDistance then
+                    PerformParry()
                 end
             end
         end
-    end
-    
-    local Result = {}
-    for p, _ in pairs(Found) do table.insert(Result, p) end
-    return Result
+    end)
 end
 
---// RENDER LOOP \\--
-RunService.RenderStepped:Connect(function()
-    if ToolMode == "Delete" then
-        SelectionFolder:ClearAllChildren()
-        local _, target = GetMouseHit()
-        
-        if target and IsSafeToDelete(target) then
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-                -- Group Select
-                GroupParts = FindConnectedParts(target)
-                for _, p in ipairs(GroupParts) do
-                    HighlightPart(p)
-                end
-                StatusLabel.Text = "Shift Held: " .. #GroupParts .. " parts (Radius 10, Mat+Color Match)"
-            else
-                -- Single Select
-                GroupParts = {target}
-                HighlightPart(target)
-                StatusLabel.Text = "Hovering: " .. target.Name
-            end
-        else
-            GroupParts = {}
-        end
-        
-    elseif ToolMode == "Create" then
-        local hitPos, _ = GetMouseHit()
-        
-        if not TempPart then
-            TempPart = Instance.new("Part")
-            TempPart.Anchored = true
-            TempPart.CanCollide = false
-            TempPart.Transparency = 0.5
-            TempPart.Color = Color3.fromRGB(0, 255, 0)
-            TempPart.Parent = workspace
-        end
-
-        if CreateStep == 2 and Points[1] then
-            -- Step 2: Define Length & Incline (Line between P1 and P2)
-            local P1 = Points[1]
-            local P2 = hitPos
-            local Mid = (P1 + P2) / 2
-            local Dist = (P1 - P2).Magnitude
-            
-            TempPart.Size = Vector3.new(0.2, 0.2, Dist)
-            TempPart.CFrame = CFrame.lookAt(Mid, P2)
-            
-        elseif CreateStep == 3 and Points[1] and Points[2] then
-            -- Step 3: Directional Width Expansion
-            local P1 = Points[1]
-            local P2 = Points[2]
-            local MidLine = (P1 + P2) / 2
-            local BaseCF = CFrame.lookAt(MidLine, P2)
-            
-            -- Convert mouse hit to object space relative to the line
-            local RelPos = BaseCF:PointToObjectSpace(hitPos)
-            local Width = math.abs(RelPos.X)
-            local Direction = math.sign(RelPos.X) -- -1 is left, 1 is right
-            
-            -- Shift center so edge stays at line
-            local OffsetX = (Width / 2) * Direction
-            local NewCenter = BaseCF * CFrame.new(OffsetX, 0, 0)
-            
-            TempPart.Size = Vector3.new(Width, 0.2, (P1-P2).Magnitude)
-            TempPart.CFrame = NewCenter
-            
-        elseif CreateStep == 4 and Points[1] and Points[2] and Points[3] then
-            -- Step 4: Directional Height Expansion
-            local P1 = Points[1]
-            local P2 = Points[2]
-            local WidthData = Points[3] -- Contains {Width, CenterCF}
-            
-            local BaseCF = WidthData.CenterCF
-            local RelPos = BaseCF:PointToObjectSpace(hitPos)
-            local Height = math.abs(RelPos.Y)
-            local Direction = math.sign(RelPos.Y) -- -1 is down, 1 is up
-            
-            -- Shift center so bottom/top stays at previous plane
-            local OffsetY = (Height / 2) * Direction
-            local NewCenter = BaseCF * CFrame.new(0, OffsetY, 0)
-            
-            TempPart.Size = Vector3.new(WidthData.Width, Height, (P1-P2).Magnitude)
-            TempPart.CFrame = NewCenter
-        end
+-- Listen for existing and new mobs
+if Workspace:FindFirstChild("Living") then
+    for _, Mob in pairs(Workspace.Living:GetChildren()) do
+        SetupMobListener(Mob)
     end
-end)
+    Workspace.Living.ChildAdded:Connect(SetupMobListener)
+end
 
---// INPUT HANDLER \\--
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        local hitPos, target = GetMouseHit()
-        
-        if ToolMode == "Create" then
-            if CreateStep == 1 then
-                Points[1] = hitPos
-                CreateStep = 2
-                StatusLabel.Text = "Step 2: Click End Corner (Length/Incline)"
-                
-            elseif CreateStep == 2 then
-                Points[2] = hitPos
-                CreateStep = 3
-                StatusLabel.Text = "Step 3: Click to set Width (Expands towards mouse)"
-                
-            elseif CreateStep == 3 then
-                -- Store Width and the CFrame calculated in RenderStepped
-                -- We need to recalculate it exactly as the Render loop did to freeze it
-                local P1 = Points[1]
-                local P2 = Points[2]
-                local MidLine = (P1 + P2) / 2
-                local BaseCF = CFrame.lookAt(MidLine, P2)
-                local RelPos = BaseCF:PointToObjectSpace(hitPos)
-                local Width = math.abs(RelPos.X)
-                local Direction = math.sign(RelPos.X)
-                local OffsetX = (Width / 2) * Direction
-                local NewCenter = BaseCF * CFrame.new(OffsetX, 0, 0)
-                
-                Points[3] = {Width = Width, CenterCF = NewCenter}
-                
-                CreateStep = 4
-                StatusLabel.Text = "Step 4: Click to set Height (Expands towards mouse)"
-                
-            elseif CreateStep == 4 then
-                -- Finalize
-                if TempPart then
-                    local FinalPart = TempPart:Clone()
-                    FinalPart.Parent = workspace
-                    FinalPart.CanCollide = true
-                    FinalPart.Transparency = 0.5
-                    
-                    local rx, ry, rz = FinalPart.CFrame:ToEulerAnglesXYZ()
-                    
-                    table.insert(CreatedParts, {
-                        Size = FinalPart.Size,
-                        Pos = FinalPart.Position,
-                        Rot = {X=rx, Y=ry, Z=rz}
-                    })
-                    
-                    TempPart:Destroy()
-                    TempPart = nil
-                end
-                CreateStep = 1
-                Points = {}
-                StatusLabel.Text = "Part Created! Click Start Corner for next."
-            end
-            
-        elseif ToolMode == "Delete" then
-            if #GroupParts > 0 then
-                for _, part in ipairs(GroupParts) do
-                    local path = "workspace"
-                    local hierarchy = {}
-                    local current = part
-                    while current and current ~= game do
-                        table.insert(hierarchy, 1, current.Name)
-                        current = current.Parent
-                    end
-                    if hierarchy[1] == "Workspace" then table.remove(hierarchy, 1) end
-                    
-                    for _, name in ipairs(hierarchy) do
-                        if name:match("^%d") or name:match("%W") then
-                            path = path .. "[\"" .. name .. "\"]"
-                        else
-                            path = path .. "." .. name
+--// COMBAT & MINING LOGIC \\--
+
+function IsRockBroken(Hitbox)
+    if not Hitbox or not Hitbox.Parent then return true end
+    local InfoFrame = Hitbox.Parent:FindFirstChild("infoFrame")
+    if InfoFrame and InfoFrame:FindFirstChild("Frame") and InfoFrame.Frame:FindFirstChild("rockHP") then
+        local Text = InfoFrame.Frame.rockHP.Text
+        return Text == "0 HP" or string.sub(Text, 1, 2) == "0/"
+    end
+    return false
+end
+
+function Attack(ToolName)
+    local args = { ToolName }
+    pcall(function()
+        game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.ToolActivated:InvokeServer(unpack(args))
+    end)
+end
+
+function GetClosestTarget(IsMob)
+    local Char = GetCharacter()
+    local Root = Char and Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return nil end
+
+    local ClosestTarget = nil
+    local ClosestDist = math.huge
+
+    if IsMob then
+        -- MOB LOGIC
+        if Workspace:FindFirstChild("Living") then
+            for _, Mob in pairs(Workspace.Living:GetChildren()) do
+                if table.find(Config.SelectedMobs, Mob.Name) and not Players:GetPlayerFromCharacter(Mob) then
+                    local MobRoot = Mob:FindFirstChild("HumanoidRootPart")
+                    local Humanoid = Mob:FindFirstChild("Humanoid")
+                    if MobRoot and Humanoid and Humanoid.Health > 0 then
+                        local Dist = (Root.Position - MobRoot.Position).Magnitude
+                        if Dist < ClosestDist then
+                            ClosestDist = Dist
+                            ClosestTarget = MobRoot
                         end
                     end
-                    
-                    table.insert(DeletedPaths, path)
-                    part:Destroy()
                 end
-                StatusLabel.Text = "Deleted " .. #GroupParts .. " parts."
-                SelectionFolder:ClearAllChildren()
-                GroupParts = {}
+            end
+        end
+    else
+        -- ROCK LOGIC
+        if Workspace:FindFirstChild("Rocks") then
+            for _, Area in pairs(Workspace.Rocks:GetChildren()) do
+                for _, Container in pairs(Area:GetChildren()) do
+                    for _, Item in pairs(Container:GetChildren()) do
+                        if table.find(Config.SelectedRocks, Item.Name) and Item:FindFirstChild("Hitbox") then
+                            if not IsRockBroken(Item.Hitbox) then
+                                local Dist = (Root.Position - Item.Hitbox.Position).Magnitude
+                                if Dist < ClosestDist then
+                                    ClosestDist = Dist
+                                    ClosestTarget = Item.Hitbox
+                                end
+                            end
+                        end
+                    end
+                end
             end
         end
     end
+    
+    return ClosestTarget
+end
+
+function PathfindTo(TargetPart)
+    local Char = GetCharacter()
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    local Humanoid = Char:FindFirstChild("Humanoid")
+    if not Root or not Humanoid then return end
+
+    if Root.Anchored == false then
+        pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
+    end
+
+    local Path = PathfindingService:CreatePath({
+        AgentRadius = 3, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 8, Costs = { Water = 20 }
+    })
+
+    local Success = pcall(function() Path:ComputeAsync(Root.Position, TargetPart.Position) end)
+
+    if Success and Path.Status == Enum.PathStatus.Success then
+        local Waypoints = Path:GetWaypoints()
+        ManageRunState(true)
+
+        for i, Waypoint in pairs(Waypoints) do
+            if not Config.AutoFarmRocks and not Config.AutoFarmMobs then break end
+            
+            -- PARRY PAUSE
+            while IsParrying do task.wait() end
+
+            -- Check if target is dead/broken
+            if Config.AutoFarmRocks and IsRockBroken(TargetPart) then return end
+            if Config.AutoFarmMobs and (not TargetPart.Parent or TargetPart.Parent.Humanoid.Health <= 0) then return end
+
+            -- "Walk Past" Logic (Only for Rocks for now)
+            if Config.AutoFarmRocks then
+                local DistToTarget = (Root.Position - TargetPart.Position).Magnitude
+                if DistToTarget > 20 then
+                     local Nearby = GetClosestTarget(false)
+                     if Nearby and Nearby ~= TargetPart and (Root.Position - Nearby.Position).Magnitude < Config.AttackDistance then
+                         CurrentTarget = Nearby
+                         return 
+                     end
+                end
+            end
+
+            Humanoid:MoveTo(Waypoint.Position)
+            if Waypoint.Action == Enum.PathWaypointAction.Jump then Humanoid.Jump = true end
+            
+            local Timeout = 0
+            while (Config.AutoFarmRocks or Config.AutoFarmMobs) do
+                if IsParrying then break end -- Break loop to stop moving
+                
+                local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
+                if DistToWaypoint < 4 then break end
+                
+                Timeout = Timeout + 0.1
+                if Timeout > 2 then break end
+                if (Root.Position - TargetPart.Position).Magnitude < Config.AttackDistance then return end
+                task.wait(0.1)
+            end
+        end
+    else
+        ManageRunState(true)
+        Humanoid:MoveTo(TargetPart.Position)
+    end
+end
+
+--// MAIN LOOP \\--
+
+task.spawn(function()
+    while true do
+        task.wait()
+        
+        -- Handle Parry Pause
+        if IsParrying then
+            task.wait(0.1)
+            continue
+        end
+
+        if Config.AutoFarmRocks or Config.AutoFarmMobs then
+            local Char = GetCharacter()
+            if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") and Char.Humanoid.Health > 0 then
+                
+                local IsMobMode = Config.AutoFarmMobs
+                local ToolName = IsMobMode and "Weapon" or "Pickaxe"
+                EquipTool(ToolName)
+                
+                -- Target Validation
+                if CurrentTarget then
+                    if IsMobMode then
+                        if not CurrentTarget.Parent or CurrentTarget.Parent.Humanoid.Health <= 0 then CurrentTarget = nil end
+                    else
+                        if IsRockBroken(CurrentTarget) or not CurrentTarget.Parent then CurrentTarget = nil end
+                    end
+                    
+                    if CurrentTarget then
+                        local Dist = (Char.HumanoidRootPart.Position - CurrentTarget.Position).Magnitude
+                        if Dist > 300 then CurrentTarget = nil end
+                    end
+                end
+
+                -- Target Acquisition
+                if not CurrentTarget then
+                    CurrentTarget = GetClosestTarget(IsMobMode)
+                end
+                
+                -- Execution
+                if CurrentTarget then
+                    local Root = Char.HumanoidRootPart
+                    local Distance = (Root.Position - CurrentTarget.Position).Magnitude
+                    
+                    if Distance > Config.AttackDistance then
+                        Fluent:Notify({ Title = "Farming", Content = "Moving to " .. CurrentTarget.Parent.Name, Duration = 1 })
+                        PathfindTo(CurrentTarget)
+                    else
+                        -- ATTACKING
+                        ManageRunState(false)
+                        Char.Humanoid:MoveTo(Root.Position)
+                        
+                        local LookPos = CurrentTarget.Position
+                        Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
+                        
+                        while (Config.AutoFarmRocks or Config.AutoFarmMobs) and CurrentTarget and CurrentTarget.Parent do
+                            if IsParrying then task.wait() continue end -- Pause attack loop if parrying
+
+                            if IsMobMode then
+                                if CurrentTarget.Parent.Humanoid.Health <= 0 then CurrentTarget = nil break end
+                            else
+                                if IsRockBroken(CurrentTarget) then CurrentTarget = nil break end
+                            end
+
+                            -- Face Target
+                            local CurrentLook = Root.CFrame.LookVector
+                            local TargetDir = (CurrentTarget.Position - Root.Position).Unit
+                            if (CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z) < 0.5 then
+                                Root.CFrame = CFrame.new(Root.Position, Vector3.new(CurrentTarget.Position.X, Root.Position.Y, CurrentTarget.Position.Z))
+                            end
+
+                            if CurrentTarget.Position.Y > (Root.Position.Y + 3.5) then Char.Humanoid.Jump = true end
+
+                            Attack(ToolName)
+                            task.wait(Config.SwingDelay)
+                            
+                            if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then break end
+                            if (Root.Position - CurrentTarget.Position).Magnitude > Config.AttackDistance + 5 then break end
+                        end
+                    end
+                else
+                    ManageRunState(false)
+                    task.wait(0.5)
+                end
+            else
+                task.wait(1)
+            end
+        else
+            ManageRunState(false)
+        end
+    end
 end)
+
+--// CLEANUP \\--
+Window:OnDestroy(function()
+    if MobileButton then MobileButton:Destroy() end
+end)
+
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+Window:SelectTab(1)
+Fluent:Notify({ Title = "The Forge Hub", Content = "V12 Loaded. Mobile Button Added.", Duration = 5 })
