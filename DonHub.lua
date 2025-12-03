@@ -7,7 +7,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
-local CoreGui = game:GetService("CoreGui")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -24,9 +24,9 @@ local Config = {
     
     -- Parry Configuration
     ParryEnabled = true,
-    ParryDelay = 0.25, -- Time between sound detection and blocking
-    BlockDuration = 0.25, -- How long to hold block
-    ParryDistance = 10 -- Max distance to react to sounds
+    ParryDelay = 0.25,
+    BlockDuration = 0.25,
+    ParryDistance = 15
 }
 
 --// PARRY SOUND LIST \\--
@@ -45,19 +45,51 @@ local ParrySounds = {
 local Anim_RunDefault = Instance.new("Animation")
 Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
 
-local Anim_RunPickaxe = Instance.new("Animation") -- Also used for Weapon run
+local Anim_RunPickaxe = Instance.new("Animation")
 Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
 
 --// STATE VARIABLES \\--
 local CurrentTarget = nil 
 local CurrentAnimTrack = nil
-local IsParrying = false -- Global flag to pause movement
+local IsParrying = false
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
-local MobileButton = nil
+local MobileButtonGui = nil
+
+--// ASSET LOADING (SAFE MODE) \\--
+local RockOptions = {}
+local MobOptions = {}
+
+-- Attempt to load assets with a timeout to prevent freezing
+task.spawn(function()
+    pcall(function()
+        local Assets = ReplicatedStorage:WaitForChild("Assets", 5)
+        if Assets then
+            if Assets:FindFirstChild("Rocks") then
+                for _, rock in pairs(Assets.Rocks:GetChildren()) do table.insert(RockOptions, rock.Name) end
+            end
+            if Assets:FindFirstChild("Mobs") then
+                for _, mob in pairs(Assets.Mobs:GetChildren()) do table.insert(MobOptions, mob.Name) end
+            end
+        end
+    end)
+end)
+
+-- Wait briefly for assets to populate, but don't block execution
+local StartTime = tick()
+while (#RockOptions == 0 or #MobOptions == 0) and (tick() - StartTime) < 2 do
+    task.wait(0.1)
+end
+
+-- Fallback if empty
+if #RockOptions == 0 then table.insert(RockOptions, "None Found") end
+if #MobOptions == 0 then table.insert(MobOptions, "None Found") end
+
+table.sort(RockOptions)
+table.sort(MobOptions)
 
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
-    Title = "The Forge | Script Hub V12",
+    Title = "The Forge | Script Hub V13",
     SubTitle = "by DonHub",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
@@ -71,54 +103,15 @@ local Tabs = {
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
---// ASSET LOADING \\--
-local RockOptions = {}
-local MobOptions = {}
-
-local Assets = ReplicatedStorage:WaitForChild("Assets")
-if Assets:FindFirstChild("Rocks") then
-    for _, rock in pairs(Assets.Rocks:GetChildren()) do table.insert(RockOptions, rock.Name) end
-end
-if Assets:FindFirstChild("Mobs") then
-    for _, mob in pairs(Assets.Mobs:GetChildren()) do table.insert(MobOptions, mob.Name) end
-end
-
-table.sort(RockOptions)
-table.sort(MobOptions)
-
---// MOBILE TOGGLE BUTTON \\--
-if CoreGui:FindFirstChild("ForgeHubMobileButton") then
-    CoreGui.ForgeHubMobileButton:Destroy()
-end
-
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "ForgeHubMobileButton"
-ScreenGui.Parent = CoreGui
-
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Parent = ScreenGui
-ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
-ToggleBtn.Position = UDim2.new(0.9, 0, 0.3, 0)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.Text = "UI"
-ToggleBtn.UICorner = Instance.new("UICorner", ToggleBtn)
-ToggleBtn.UICorner.CornerRadius = UDim.new(1, 0)
-ToggleBtn.Draggable = true
-
-ToggleBtn.MouseButton1Click:Connect(function()
-    -- Fluent specific toggle logic (simulating MinimizeKey)
-    local virtualInput = game:GetService("VirtualInputManager")
-    virtualInput:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
-    virtualInput:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
-end)
-
-MobileButton = ScreenGui
-
 --// UI ELEMENTS \\--
 
+Tabs.Farm:AddParagraph({
+    Title = "Instructions",
+    Content = "Select items below, then enable the farm. \nUse the Mobile Button to toggle UI."
+})
+
 -- ROCKS SECTION
-local RockSection = Tabs.Farm:AddSection("Rock Mining")
+Tabs.Farm:AddSection("Rock Mining")
 
 local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
     Title = "Select Rocks",
@@ -130,18 +123,18 @@ local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
 RockDropdown:OnChanged(function(Value)
     Config.SelectedRocks = {}
     for Name, Selected in pairs(Value) do
-        if Selected then table.insert(Config.SelectedRocks, Name) end
+        if Selected and Name ~= "None Found" then table.insert(Config.SelectedRocks, Name) end
     end
 end)
 
 Tabs.Farm:AddToggle("AutoFarmRocks", {Title = "Enable Rock Farm", Default = false }):OnChanged(function(Value)
     Config.AutoFarmRocks = Value
-    Config.AutoFarmMobs = false -- Mutual exclusion for safety
+    Config.AutoFarmMobs = false
     ResetFarm()
 end)
 
 -- MOBS SECTION
-local MobSection = Tabs.Farm:AddSection("Mob Farming")
+Tabs.Farm:AddSection("Mob Farming")
 
 local MobDropdown = Tabs.Farm:AddDropdown("MobSelection", {
     Title = "Select Mobs",
@@ -153,14 +146,82 @@ local MobDropdown = Tabs.Farm:AddDropdown("MobSelection", {
 MobDropdown:OnChanged(function(Value)
     Config.SelectedMobs = {}
     for Name, Selected in pairs(Value) do
-        if Selected then table.insert(Config.SelectedMobs, Name) end
+        if Selected and Name ~= "None Found" then table.insert(Config.SelectedMobs, Name) end
     end
 end)
 
 Tabs.Farm:AddToggle("AutoFarmMobs", {Title = "Enable Mob Farm", Default = false }):OnChanged(function(Value)
     Config.AutoFarmMobs = Value
-    Config.AutoFarmRocks = false -- Mutual exclusion
+    Config.AutoFarmRocks = false
     ResetFarm()
+end)
+
+--// MOBILE TOGGLE BUTTON (PLAYERGUI) \\--
+task.spawn(function()
+    pcall(function()
+        if LocalPlayer.PlayerGui:FindFirstChild("ForgeHubMobileButton") then
+            LocalPlayer.PlayerGui.ForgeHubMobileButton:Destroy()
+        end
+
+        local ScreenGui = Instance.new("ScreenGui")
+        ScreenGui.Name = "ForgeHubMobileButton"
+        ScreenGui.Parent = LocalPlayer.PlayerGui
+        ScreenGui.ResetOnSpawn = false
+
+        local ToggleBtn = Instance.new("TextButton")
+        ToggleBtn.Parent = ScreenGui
+        ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
+        ToggleBtn.Position = UDim2.new(0.85, 0, 0.2, 0)
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ToggleBtn.Text = "UI"
+        ToggleBtn.TextSize = 20
+        ToggleBtn.Font = Enum.Font.GothamBold
+        ToggleBtn.BorderSizePixel = 0
+        
+        local Corner = Instance.new("UICorner")
+        Corner.CornerRadius = UDim.new(1, 0)
+        Corner.Parent = ToggleBtn
+        
+        -- Add Stroke for visibility
+        local Stroke = Instance.new("UIStroke")
+        Stroke.Parent = ToggleBtn
+        Stroke.Color = Color3.fromRGB(100, 100, 100)
+        Stroke.Thickness = 2
+
+        -- Make Draggable
+        local dragging, dragInput, dragStart, startPos
+        ToggleBtn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = ToggleBtn.Position
+            end
+        end)
+        
+        ToggleBtn.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        
+        game:GetService("UserInputService").InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                ToggleBtn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+
+        -- Toggle Logic
+        ToggleBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
+            end)
+        end)
+
+        MobileButtonGui = ScreenGui
+    end)
 end)
 
 --// HELPER FUNCTIONS \\--
@@ -193,7 +254,6 @@ function EquipTool(ToolName)
     end
 end
 
--- Speed & Animation Manager
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
@@ -202,10 +262,9 @@ function ManageRunState(ShouldRun)
     
     if not Humanoid then return end
 
-    -- Pause speed enforcement if parrying
     if IsParrying then
         if SpeedState.Connection then SpeedState.Connection:Disconnect() SpeedState.Connection = nil end
-        Humanoid.WalkSpeed = 0 -- Anchor for block
+        Humanoid.WalkSpeed = 0 
         return
     end
 
@@ -260,29 +319,25 @@ function PerformParry()
     
     local Char = GetCharacter()
     if Char and Char:FindFirstChild("Humanoid") then
-        Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position) -- Stop Moving
-        Char.Humanoid.WalkSpeed = 0 -- Force Stop
+        Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
+        Char.Humanoid.WalkSpeed = 0
     end
 
     task.spawn(function()
         task.wait(Config.ParryDelay)
-        
-        -- Start Block
-        game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StartBlock:InvokeServer()
-        
+        pcall(function()
+            game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StartBlock:InvokeServer()
+        end)
         task.wait(Config.BlockDuration)
-        
-        -- Stop Block
-        game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StopBlock:InvokeServer()
-        
+        pcall(function()
+            game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StopBlock:InvokeServer()
+        end)
         IsParrying = false
-        -- Speed will be reset by ManageRunState loop
     end)
 end
 
 function SetupMobListener(Mob)
     if not Mob:IsA("Model") then return end
-    -- Filter Players
     if Players:GetPlayerFromCharacter(Mob) then return end
     
     local Root = Mob:WaitForChild("HumanoidRootPart", 5)
@@ -290,8 +345,6 @@ function SetupMobListener(Mob)
 
     Root.ChildAdded:Connect(function(Child)
         if not Config.ParryEnabled then return end
-        
-        -- Check if sound matches list
         if table.find(ParrySounds, Child.Name) then
             local Char = GetCharacter()
             if Char and Char:FindFirstChild("HumanoidRootPart") then
@@ -304,11 +357,8 @@ function SetupMobListener(Mob)
     end)
 end
 
--- Listen for existing and new mobs
 if Workspace:FindFirstChild("Living") then
-    for _, Mob in pairs(Workspace.Living:GetChildren()) do
-        SetupMobListener(Mob)
-    end
+    for _, Mob in pairs(Workspace.Living:GetChildren()) do SetupMobListener(Mob) end
     Workspace.Living.ChildAdded:Connect(SetupMobListener)
 end
 
@@ -340,7 +390,6 @@ function GetClosestTarget(IsMob)
     local ClosestDist = math.huge
 
     if IsMob then
-        -- MOB LOGIC
         if Workspace:FindFirstChild("Living") then
             for _, Mob in pairs(Workspace.Living:GetChildren()) do
                 if table.find(Config.SelectedMobs, Mob.Name) and not Players:GetPlayerFromCharacter(Mob) then
@@ -357,7 +406,6 @@ function GetClosestTarget(IsMob)
             end
         end
     else
-        -- ROCK LOGIC
         if Workspace:FindFirstChild("Rocks") then
             for _, Area in pairs(Workspace.Rocks:GetChildren()) do
                 for _, Container in pairs(Area:GetChildren()) do
@@ -376,7 +424,6 @@ function GetClosestTarget(IsMob)
             end
         end
     end
-    
     return ClosestTarget
 end
 
@@ -403,15 +450,11 @@ function PathfindTo(TargetPart)
 
         for i, Waypoint in pairs(Waypoints) do
             if not Config.AutoFarmRocks and not Config.AutoFarmMobs then break end
-            
-            -- PARRY PAUSE
             while IsParrying do task.wait() end
 
-            -- Check if target is dead/broken
             if Config.AutoFarmRocks and IsRockBroken(TargetPart) then return end
             if Config.AutoFarmMobs and (not TargetPart.Parent or TargetPart.Parent.Humanoid.Health <= 0) then return end
 
-            -- "Walk Past" Logic (Only for Rocks for now)
             if Config.AutoFarmRocks then
                 local DistToTarget = (Root.Position - TargetPart.Position).Magnitude
                 if DistToTarget > 20 then
@@ -428,11 +471,9 @@ function PathfindTo(TargetPart)
             
             local Timeout = 0
             while (Config.AutoFarmRocks or Config.AutoFarmMobs) do
-                if IsParrying then break end -- Break loop to stop moving
-                
+                if IsParrying then break end
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
                 if DistToWaypoint < 4 then break end
-                
                 Timeout = Timeout + 0.1
                 if Timeout > 2 then break end
                 if (Root.Position - TargetPart.Position).Magnitude < Config.AttackDistance then return end
@@ -446,16 +487,10 @@ function PathfindTo(TargetPart)
 end
 
 --// MAIN LOOP \\--
-
 task.spawn(function()
     while true do
         task.wait()
-        
-        -- Handle Parry Pause
-        if IsParrying then
-            task.wait(0.1)
-            continue
-        end
+        if IsParrying then task.wait(0.1) continue end
 
         if Config.AutoFarmRocks or Config.AutoFarmMobs then
             local Char = GetCharacter()
@@ -465,26 +500,20 @@ task.spawn(function()
                 local ToolName = IsMobMode and "Weapon" or "Pickaxe"
                 EquipTool(ToolName)
                 
-                -- Target Validation
                 if CurrentTarget then
                     if IsMobMode then
                         if not CurrentTarget.Parent or CurrentTarget.Parent.Humanoid.Health <= 0 then CurrentTarget = nil end
                     else
                         if IsRockBroken(CurrentTarget) or not CurrentTarget.Parent then CurrentTarget = nil end
                     end
-                    
                     if CurrentTarget then
                         local Dist = (Char.HumanoidRootPart.Position - CurrentTarget.Position).Magnitude
                         if Dist > 300 then CurrentTarget = nil end
                     end
                 end
 
-                -- Target Acquisition
-                if not CurrentTarget then
-                    CurrentTarget = GetClosestTarget(IsMobMode)
-                end
+                if not CurrentTarget then CurrentTarget = GetClosestTarget(IsMobMode) end
                 
-                -- Execution
                 if CurrentTarget then
                     local Root = Char.HumanoidRootPart
                     local Distance = (Root.Position - CurrentTarget.Position).Magnitude
@@ -493,7 +522,6 @@ task.spawn(function()
                         Fluent:Notify({ Title = "Farming", Content = "Moving to " .. CurrentTarget.Parent.Name, Duration = 1 })
                         PathfindTo(CurrentTarget)
                     else
-                        -- ATTACKING
                         ManageRunState(false)
                         Char.Humanoid:MoveTo(Root.Position)
                         
@@ -501,15 +529,13 @@ task.spawn(function()
                         Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
                         
                         while (Config.AutoFarmRocks or Config.AutoFarmMobs) and CurrentTarget and CurrentTarget.Parent do
-                            if IsParrying then task.wait() continue end -- Pause attack loop if parrying
-
+                            if IsParrying then task.wait() continue end
                             if IsMobMode then
                                 if CurrentTarget.Parent.Humanoid.Health <= 0 then CurrentTarget = nil break end
                             else
                                 if IsRockBroken(CurrentTarget) then CurrentTarget = nil break end
                             end
 
-                            -- Face Target
                             local CurrentLook = Root.CFrame.LookVector
                             local TargetDir = (CurrentTarget.Position - Root.Position).Unit
                             if (CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z) < 0.5 then
@@ -538,9 +564,8 @@ task.spawn(function()
     end
 end)
 
---// CLEANUP \\--
 Window:OnDestroy(function()
-    if MobileButton then MobileButton:Destroy() end
+    if MobileButtonGui then MobileButtonGui:Destroy() end
 end)
 
 SaveManager:SetLibrary(Fluent)
@@ -551,4 +576,4 @@ InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
 Window:SelectTab(1)
-Fluent:Notify({ Title = "The Forge Hub", Content = "V12 Loaded. Mobile Button Added.", Duration = 5 })
+Fluent:Notify({ Title = "The Forge Hub", Content = "Script Loaded!", Duration = 3 })
