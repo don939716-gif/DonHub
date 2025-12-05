@@ -1,6 +1,6 @@
 --[[
     DonHub - The Forge Script Hub
-    Version: v1.3.0
+    Version: v1.4.0
     Author: Don
     License: Private
 ]]
@@ -42,7 +42,7 @@ local ParryConfig = {
     Enabled = true,
     DetectionRange = 10,
     BlockDuration = 0.25, 
-    TimingMultiplier = 0.5, -- Cuts time down to 90%
+    TimingMultiplier = 0.6, -- Cuts time down to 60%
     
     -- Format: ["MobName - SoundName"] = RawDelaySeconds
     Delays = {
@@ -71,9 +71,16 @@ local ParryConfig = {
 
 --// ASSET CACHING \\--
 local WeaponMap = {} -- [WeaponName] = CategoryName
-local RunAnimationIds = {} -- [Category] = AnimationId String
+local CategoryAnimations = {} -- [CategoryName] = AnimationInstance
 
--- Pre-scan Weapon Categories
+-- 1. Default Animations
+local Anim_RunDefault = Instance.new("Animation")
+Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
+
+local Anim_RunPickaxe = Instance.new("Animation")
+Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
+
+-- 2. Pre-scan Weapon Categories
 local EquipAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Equipments"):WaitForChild("Weapons")
 for _, CategoryFolder in pairs(EquipAssets:GetChildren()) do
     for _, WeaponModel in pairs(CategoryFolder:GetChildren()) do
@@ -81,23 +88,21 @@ for _, CategoryFolder in pairs(EquipAssets:GetChildren()) do
     end
 end
 
--- Pre-scan Run Animations
+-- 3. Pre-scan Category Run Animations
 local AnimAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("Movement")
 for _, CategoryFolder in pairs(AnimAssets:GetChildren()) do
     local RunAnim = CategoryFolder:FindFirstChild("Run")
     if RunAnim and RunAnim:IsA("Animation") then
-        RunAnimationIds[CategoryFolder.Name] = RunAnim.AnimationId
+        -- Create a new Animation Instance for this category
+        local NewAnim = Instance.new("Animation")
+        NewAnim.AnimationId = RunAnim.AnimationId
+        CategoryAnimations[CategoryFolder.Name] = NewAnim
     end
 end
-
--- Default IDs
-local ID_RunDefault = "rbxassetid://120321298562953"
-local ID_RunPickaxe = "rbxassetid://91424712336158"
 
 --// STATE VARIABLES \\--
 local CurrentTarget = nil 
 local CurrentAnimTrack = nil
-local CurrentAnimId = nil
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 local IsParrying = false
 local ActiveMobConnections = {} -- [Model] = Connection
@@ -160,48 +165,46 @@ function ManageRunState(ShouldRun)
         Humanoid.WalkSpeed = Config.WalkSpeed
     end
 
-    -- 2. Handle Animations (Run Only)
+    -- 2. Handle Animations
     if not Animator then return end
 
-    -- Use MoveDirection for intent, rather than Velocity which can be jittery
+    -- Determine Intent to Move
     local IsMoving = Humanoid.MoveDirection.Magnitude > 0
     
     if IsMoving and ShouldRun and not IsParrying then
-        local TargetId = ID_RunDefault
+        -- Determine which Animation Object we WANT to play
+        local TargetAnim = Anim_RunDefault
         
-        -- Check for Pickaxe
         if Char:FindFirstChild("Pickaxe") then
-            TargetId = ID_RunPickaxe
+            TargetAnim = Anim_RunPickaxe
         else
-            -- Check for Weapon
             local Category = GetEquippedWeaponCategory(Char)
-            if Category and RunAnimationIds[Category] then
-                TargetId = RunAnimationIds[Category]
+            if Category and CategoryAnimations[Category] then
+                TargetAnim = CategoryAnimations[Category]
             end
         end
 
-        -- Play if not already playing or if ID changed
-        if CurrentAnimId ~= TargetId or (CurrentAnimTrack and not CurrentAnimTrack.IsPlaying) then
-            if CurrentAnimTrack then CurrentAnimTrack:Stop(0.1) end
-            
-            local NewAnim = Instance.new("Animation")
-            NewAnim.AnimationId = TargetId
-            
-            pcall(function()
-                CurrentAnimTrack = Animator:LoadAnimation(NewAnim)
-                -- Action4 is highest priority to override game animations
-                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action4 
-                CurrentAnimTrack.Looped = true
-                CurrentAnimTrack:Play(0.1)
-                CurrentAnimId = TargetId
-            end)
+        -- Check if we are already playing THIS specific animation
+        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
+            if CurrentAnimTrack.Animation.AnimationId == TargetAnim.AnimationId then
+                return -- Already playing the correct animation, do nothing
+            else
+                CurrentAnimTrack:Stop() -- Playing wrong animation, stop it
+            end
         end
+
+        -- Load and Play
+        pcall(function()
+            CurrentAnimTrack = Animator:LoadAnimation(TargetAnim)
+            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action
+            CurrentAnimTrack.Looped = true
+            CurrentAnimTrack:Play()
+        end)
     else
         -- Stop Animation if not moving or not running
         if CurrentAnimTrack then
-            CurrentAnimTrack:Stop(0.2)
+            CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
-            CurrentAnimId = nil
         end
     end
 end
@@ -314,7 +317,7 @@ function PerformParry(RawDelay)
     if IsParrying then return end
     IsParrying = true
     
-    -- Apply 90% Multiplier
+    -- Apply 60% Multiplier
     local AdjustedDelay = RawDelay * ParryConfig.TimingMultiplier
 
     -- Stop Movement
@@ -417,7 +420,7 @@ end
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
     Title = "DonHub | The Forge",
-    SubTitle = "v1.3.0",
+    SubTitle = "v1.4.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -725,6 +728,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub",
-    Content = "Loaded v1.3.0 Successfully!",
+    Content = "Loaded v1.4.0 Successfully!",
     Duration = 5
 })
