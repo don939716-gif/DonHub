@@ -95,7 +95,7 @@ ClearBtn.TextSize = 14
 --// LOGIC VARIABLES \\--
 local LoggedData = {} 
 local RecentSounds = {} 
-local MaxSoundAge = 1.0 -- Reduced from 2.0 to 1.0 for tighter accuracy
+local MaxSoundAge = 2.0 -- Reduced from 2.0 to 1.0 for tighter accuracy
 local OldHealth = 0
 
 --// FUNCTIONS \\--
