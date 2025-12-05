@@ -1,6 +1,6 @@
 --[[
     DonHub - The Forge Script Hub
-    Version: v1.4.0
+    Version: v1.5.0
     Author: Don
     License: Private
 ]]
@@ -71,16 +71,9 @@ local ParryConfig = {
 
 --// ASSET CACHING \\--
 local WeaponMap = {} -- [WeaponName] = CategoryName
-local CategoryAnimations = {} -- [CategoryName] = AnimationInstance
+local RunAnimationIds = {} -- [Category] = AnimationId String
 
--- 1. Default Animations
-local Anim_RunDefault = Instance.new("Animation")
-Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
-
-local Anim_RunPickaxe = Instance.new("Animation")
-Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
-
--- 2. Pre-scan Weapon Categories
+-- Pre-scan Weapon Categories
 local EquipAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Equipments"):WaitForChild("Weapons")
 for _, CategoryFolder in pairs(EquipAssets:GetChildren()) do
     for _, WeaponModel in pairs(CategoryFolder:GetChildren()) do
@@ -88,21 +81,23 @@ for _, CategoryFolder in pairs(EquipAssets:GetChildren()) do
     end
 end
 
--- 3. Pre-scan Category Run Animations
+-- Pre-scan Run Animations
 local AnimAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("Movement")
 for _, CategoryFolder in pairs(AnimAssets:GetChildren()) do
     local RunAnim = CategoryFolder:FindFirstChild("Run")
     if RunAnim and RunAnim:IsA("Animation") then
-        -- Create a new Animation Instance for this category
-        local NewAnim = Instance.new("Animation")
-        NewAnim.AnimationId = RunAnim.AnimationId
-        CategoryAnimations[CategoryFolder.Name] = NewAnim
+        RunAnimationIds[CategoryFolder.Name] = RunAnim.AnimationId
     end
 end
+
+-- Default IDs
+local ID_RunDefault = "rbxassetid://120321298562953"
+local ID_RunPickaxe = "rbxassetid://91424712336158"
 
 --// STATE VARIABLES \\--
 local CurrentTarget = nil 
 local CurrentAnimTrack = nil
+local CurrentAnimID = nil
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 local IsParrying = false
 local ActiveMobConnections = {} -- [Model] = Connection
@@ -131,20 +126,20 @@ function GetEquippedWeaponCategory(Char)
     return nil
 end
 
--- Speed & Animation Manager
+-- Speed & Animation Manager (REVERTED TO OLDHUB STYLE)
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
     local Humanoid = Char:FindFirstChild("Humanoid")
-    local Root = Char:FindFirstChild("HumanoidRootPart")
     local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
     
-    if not Humanoid or not Root then return end
+    if not Humanoid then return end
 
-    -- 1. Handle Speed
     if ShouldRun and not IsParrying then
+        -- 1. Force Speed
         if SpeedState.Humanoid ~= Humanoid or not SpeedState.IsRunning then
             if SpeedState.Connection then SpeedState.Connection:Disconnect() end
+
             local function EnforceSpeed()
                 if Humanoid.WalkSpeed ~= Config.RunSpeed then
                     Humanoid.WalkSpeed = Config.RunSpeed
@@ -155,7 +150,43 @@ function ManageRunState(ShouldRun)
             SpeedState.Humanoid = Humanoid
             SpeedState.IsRunning = true
         end
+
+        -- 2. Determine Desired Animation
+        local DesiredID = ID_RunDefault
+        if Char:FindFirstChild("Pickaxe") then
+            DesiredID = ID_RunPickaxe
+        else
+            local Category = GetEquippedWeaponCategory(Char)
+            if Category and RunAnimationIds[Category] then
+                DesiredID = RunAnimationIds[Category]
+            end
+        end
+
+        -- 3. Play Animation
+        if Animator then
+            -- If we are already playing an animation, check if it's the RIGHT one
+            if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
+                if CurrentAnimID == DesiredID then
+                    return -- Correct animation is already playing
+                else
+                    CurrentAnimTrack:Stop() -- Wrong animation (e.g. switched weapon), stop it
+                end
+            end
+
+            -- Load and Play
+            pcall(function()
+                local AnimObj = Instance.new("Animation")
+                AnimObj.AnimationId = DesiredID
+                
+                CurrentAnimTrack = Animator:LoadAnimation(AnimObj)
+                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
+                CurrentAnimTrack.Looped = true
+                CurrentAnimTrack:Play()
+                CurrentAnimID = DesiredID
+            end)
+        end
     else
+        -- Stop Speed
         if SpeedState.Connection then
             SpeedState.Connection:Disconnect()
             SpeedState.Connection = nil
@@ -163,48 +194,12 @@ function ManageRunState(ShouldRun)
         SpeedState.IsRunning = false
         SpeedState.Humanoid = nil
         Humanoid.WalkSpeed = Config.WalkSpeed
-    end
 
-    -- 2. Handle Animations
-    if not Animator then return end
-
-    -- Determine Intent to Move
-    local IsMoving = Humanoid.MoveDirection.Magnitude > 0
-    
-    if IsMoving and ShouldRun and not IsParrying then
-        -- Determine which Animation Object we WANT to play
-        local TargetAnim = Anim_RunDefault
-        
-        if Char:FindFirstChild("Pickaxe") then
-            TargetAnim = Anim_RunPickaxe
-        else
-            local Category = GetEquippedWeaponCategory(Char)
-            if Category and CategoryAnimations[Category] then
-                TargetAnim = CategoryAnimations[Category]
-            end
-        end
-
-        -- Check if we are already playing THIS specific animation
-        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
-            if CurrentAnimTrack.Animation.AnimationId == TargetAnim.AnimationId then
-                return -- Already playing the correct animation, do nothing
-            else
-                CurrentAnimTrack:Stop() -- Playing wrong animation, stop it
-            end
-        end
-
-        -- Load and Play
-        pcall(function()
-            CurrentAnimTrack = Animator:LoadAnimation(TargetAnim)
-            CurrentAnimTrack.Priority = Enum.AnimationPriority.Action
-            CurrentAnimTrack.Looped = true
-            CurrentAnimTrack:Play()
-        end)
-    else
-        -- Stop Animation if not moving or not running
+        -- Stop Animation
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop()
             CurrentAnimTrack = nil
+            CurrentAnimID = nil
         end
     end
 end
@@ -373,6 +368,8 @@ function PathfindTo(TargetPart)
 
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
+        
+        -- START RUNNING (Imperative Call)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -420,7 +417,7 @@ end
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
     Title = "DonHub | The Forge",
-    SubTitle = "v1.4.0",
+    SubTitle = "v1.5.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -604,24 +601,6 @@ task.spawn(function()
     while true do
         task.wait()
         
-        -- Animation Update Loop
-        if not IsParrying then
-            -- Check if we are farming OR if the player is manually moving
-            local ShouldRun = Config.AutoFarmRocks or Config.AutoFarmMobs
-            
-            -- If not farming, check manual movement
-            if not ShouldRun then
-                local Char = GetCharacter()
-                if Char and Char:FindFirstChild("Humanoid") then
-                    if Char.Humanoid.MoveDirection.Magnitude > 0 then
-                        ShouldRun = true
-                    end
-                end
-            end
-            
-            ManageRunState(ShouldRun)
-        end
-
         if IsParrying then 
             task.wait(0.1)
             continue 
@@ -713,6 +692,8 @@ task.spawn(function()
             else
                 task.wait(1)
             end
+        else
+            ManageRunState(false)
         end
     end
 end)
@@ -728,6 +709,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub",
-    Content = "Loaded v1.4.0 Successfully!",
+    Content = "Loaded v1.5.0 Successfully!",
     Duration = 5
 })
