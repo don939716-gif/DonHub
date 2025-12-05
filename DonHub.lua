@@ -42,7 +42,7 @@ local ParryConfig = {
     Enabled = true,
     DetectionRange = 10,
     BlockDuration = 0.25, 
-    TimingMultiplier = 0.9, -- Cuts time down to 90%
+    TimingMultiplier = 0.7, -- Cuts time down to 90%
     
     -- Format: ["MobName - SoundName"] = RawDelaySeconds
     Delays = {
