@@ -1,6 +1,6 @@
 --[[
     DonHub - The Forge Script Hub
-    Version: v1.2.0
+    Version: v1.3.0
     Author: Don
     License: Private
 ]]
@@ -42,8 +42,9 @@ local ParryConfig = {
     Enabled = true,
     DetectionRange = 10,
     BlockDuration = 0.25, 
+    TimingMultiplier = 0.9, -- Cuts time down to 90%
     
-    -- Format: ["MobName - SoundName"] = DelaySeconds
+    -- Format: ["MobName - SoundName"] = RawDelaySeconds
     Delays = {
         ["EliteZombie - Colossal Weapon Swing 2"] = 0.409,
         ["Zombie - Zombie Swing 1"] = 0.822,
@@ -162,8 +163,8 @@ function ManageRunState(ShouldRun)
     -- 2. Handle Animations (Run Only)
     if not Animator then return end
 
-    -- Determine if we are actually moving
-    local IsMoving = Root.Velocity.Magnitude > 0.5
+    -- Use MoveDirection for intent, rather than Velocity which can be jittery
+    local IsMoving = Humanoid.MoveDirection.Magnitude > 0
     
     if IsMoving and ShouldRun and not IsParrying then
         local TargetId = ID_RunDefault
@@ -179,18 +180,19 @@ function ManageRunState(ShouldRun)
             end
         end
 
-        -- Play if not already playing
+        -- Play if not already playing or if ID changed
         if CurrentAnimId ~= TargetId or (CurrentAnimTrack and not CurrentAnimTrack.IsPlaying) then
-            if CurrentAnimTrack then CurrentAnimTrack:Stop(0.2) end
+            if CurrentAnimTrack then CurrentAnimTrack:Stop(0.1) end
             
             local NewAnim = Instance.new("Animation")
             NewAnim.AnimationId = TargetId
             
             pcall(function()
                 CurrentAnimTrack = Animator:LoadAnimation(NewAnim)
-                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action
+                -- Action4 is highest priority to override game animations
+                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action4 
                 CurrentAnimTrack.Looped = true
-                CurrentAnimTrack:Play(0.2)
+                CurrentAnimTrack:Play(0.1)
                 CurrentAnimId = TargetId
             end)
         end
@@ -308,10 +310,13 @@ function SwingTool(ToolName)
     end)
 end
 
-function PerformParry(Delay)
+function PerformParry(RawDelay)
     if IsParrying then return end
     IsParrying = true
     
+    -- Apply 90% Multiplier
+    local AdjustedDelay = RawDelay * ParryConfig.TimingMultiplier
+
     -- Stop Movement
     local Char = GetCharacter()
     if Char and Char:FindFirstChild("Humanoid") then
@@ -320,7 +325,7 @@ function PerformParry(Delay)
     ManageRunState(false)
 
     -- Wait Windup
-    task.wait(Delay)
+    task.wait(AdjustedDelay)
 
     -- Block
     pcall(function()
@@ -412,7 +417,7 @@ end
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
     Title = "DonHub | The Forge",
-    SubTitle = "v1.2.0",
+    SubTitle = "v1.3.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -525,6 +530,20 @@ MobFarmToggle:OnChanged(function(Value)
     if Value then Config.AutoFarmRocks = false end
     ResetFarmState()
 end)
+
+-- Settings: Unload Button
+Tabs.Settings:AddButton({
+    Title = "Unload Script",
+    Description = "Destroys the UI and stops the script.",
+    Callback = function()
+        Config.AutoFarmRocks = false
+        Config.AutoFarmMobs = false
+        ParryConfig.Enabled = false
+        ManageRunState(false)
+        ScreenGui:Destroy()
+        Fluent:Destroy()
+    end
+})
 
 --// PARRY SYSTEM \\--
 
@@ -695,15 +714,6 @@ task.spawn(function()
     end
 end)
 
---// CLEANUP \\--
-Window:OnUnload(function()
-    ScreenGui:Destroy()
-    Config.AutoFarmRocks = false
-    Config.AutoFarmMobs = false
-    ParryConfig.Enabled = false
-    ManageRunState(false)
-end)
-
 --// SAVE MANAGER \\--
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
@@ -715,6 +725,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub",
-    Content = "Loaded v1.2.0 Successfully!",
+    Content = "Loaded v1.3.0 Successfully!",
     Duration = 5
 })
