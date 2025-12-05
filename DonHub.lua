@@ -1,6 +1,6 @@
 --[[
     DonHub - The Forge Script Hub
-    Version: v1.1.0
+    Version: v1.2.0
     Author: Don
     License: Private
 ]]
@@ -38,37 +38,39 @@ local Config = {
 }
 
 --// PARRY CONFIGURATION \\--
--- Edit the numbers (seconds) to tune the parry timing for each specific attack.
 local ParryConfig = {
     Enabled = true,
     DetectionRange = 10,
-    BlockDuration = 0.25, -- How long to hold block
+    BlockDuration = 0.25, 
     
-    -- [Sound Name] = Windup Delay (Time before blocking)
+    -- Format: ["MobName - SoundName"] = DelaySeconds
     Delays = {
-        ["Zombie Swing 1"] = 0.25,
-        ["Zombie Swing 2"] = 0.25,
-        ["Colossal Weapon Swing 1"] = 0.25,
-        ["Colossal Weapon Swing 2"] = 0.25,
-        ["Dagger Swing 1"] = 0.25,
-        ["Dagger Swing 2"] = 0.25,
-        ["Gauntlet Swing 1"] = 0.25,
-        ["Gauntlet Swing 2"] = 0.25,
-        ["Greataxe Swing 1"] = 0.25,
-        ["Greataxe Swing 2"] = 0.25,
-        ["Greatsword Swing 1"] = 0.25,
-        ["Greatsword Swing 2"] = 0.25,
-        ["Katana Swing 1"] = 0.25,
-        ["Katana Swing 2"] = 0.25,
-        ["Katana Swing 3"] = 0.25,
-        ["Straight Swing 1"] = 0.25,
-        ["Straight Swing 2"] = 0.25
+        ["EliteZombie - Colossal Weapon Swing 2"] = 0.409,
+        ["Zombie - Zombie Swing 1"] = 0.822,
+        ["Zombie - Zombie Swing 2"] = 0.822,
+        ["EliteZombie - Colossal Weapon Swing 1"] = 0.373,
+        ["Brute Zombie - Zombie Swing 2"] = 0.480,
+        ["Delver Zombie - Zombie Swing 1"] = 0.722,
+        ["Delver Zombie - Zombie Swing 2"] = 0.539,
+        ["Brute Zombie - Zombie Swing 1"] = 0.506,
+        ["Axe Skeleton - Straight Swing 1"] = 0.531,
+        ["Reaper - Greataxe Swing 1"] = 0.150,
+        ["Deathaxe Skeleton - Zombie Swing 2"] = 0.698,
+        ["Elite Rogue Skeleton - Dagger Swing 2"] = 0.013,
+        ["Deathaxe Skeleton - Zombie Swing 1"] = 1.079,
+        ["Blazing Slime - Zombie Swing 1"] = 0.175,
+        ["Elite Rogue Skeleton - Dagger Swing 1"] = 0.300,
+        ["Elite Deathaxe Skeleton - Greataxe Swing 1"] = 1.184,
+        ["Skeleton Rogue - Dagger Swing 1"] = 0.264,
+        ["Reaper - Greataxe Swing 2"] = 0.131,
+        ["Skeleton Rogue - Dagger Swing 2"] = 0.499,
+        ["Axe Skeleton - Straight Swing 2"] = 0.259,
     }
 }
 
 --// ASSET CACHING \\--
 local WeaponMap = {} -- [WeaponName] = CategoryName
-local AnimationCache = {} -- [Category] = { Walk = Anim, Run = Anim, Idle = Anim }
+local RunAnimationIds = {} -- [Category] = AnimationId String
 
 -- Pre-scan Weapon Categories
 local EquipAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Equipments"):WaitForChild("Weapons")
@@ -78,26 +80,23 @@ for _, CategoryFolder in pairs(EquipAssets:GetChildren()) do
     end
 end
 
--- Pre-scan Animations
+-- Pre-scan Run Animations
 local AnimAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("Movement")
 for _, CategoryFolder in pairs(AnimAssets:GetChildren()) do
-    AnimationCache[CategoryFolder.Name] = {
-        Walk = CategoryFolder:FindFirstChild("Walk"),
-        Run = CategoryFolder:FindFirstChild("Run"),
-        Idle = CategoryFolder:FindFirstChild("Idle") -- Assuming "Idle" exists, if not it will be nil
-    }
+    local RunAnim = CategoryFolder:FindFirstChild("Run")
+    if RunAnim and RunAnim:IsA("Animation") then
+        RunAnimationIds[CategoryFolder.Name] = RunAnim.AnimationId
+    end
 end
 
--- Default Animations (Fallback)
-local Anim_RunDefault = Instance.new("Animation")
-Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
-local Anim_RunTool = Instance.new("Animation")
-Anim_RunTool.AnimationId = "rbxassetid://91424712336158"
+-- Default IDs
+local ID_RunDefault = "rbxassetid://120321298562953"
+local ID_RunPickaxe = "rbxassetid://91424712336158"
 
 --// STATE VARIABLES \\--
 local CurrentTarget = nil 
 local CurrentAnimTrack = nil
-local CurrentAnimType = nil -- "Run", "Walk", "Idle"
+local CurrentAnimId = nil
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 local IsParrying = false
 local ActiveMobConnections = {} -- [Model] = Connection
@@ -160,61 +159,47 @@ function ManageRunState(ShouldRun)
         Humanoid.WalkSpeed = Config.WalkSpeed
     end
 
-    -- 2. Handle Animations
+    -- 2. Handle Animations (Run Only)
     if not Animator then return end
 
-    local WeaponCategory = GetEquippedWeaponCategory(Char)
-    local MoveDirection = Humanoid.MoveDirection
-    local Speed = Root.Velocity.Magnitude
-    local DesiredAnim = nil
-    local DesiredAnimType = ""
-
-    -- Determine Desired Animation
-    if WeaponCategory and AnimationCache[WeaponCategory] then
-        local Anims = AnimationCache[WeaponCategory]
+    -- Determine if we are actually moving
+    local IsMoving = Root.Velocity.Magnitude > 0.5
+    
+    if IsMoving and ShouldRun and not IsParrying then
+        local TargetId = ID_RunDefault
         
-        if MoveDirection.Magnitude > 0 then
-            if Speed > 18 then -- Running
-                DesiredAnim = Anims.Run
-                DesiredAnimType = "Run"
-            else -- Walking
-                DesiredAnim = Anims.Walk
-                DesiredAnimType = "Walk"
+        -- Check for Pickaxe
+        if Char:FindFirstChild("Pickaxe") then
+            TargetId = ID_RunPickaxe
+        else
+            -- Check for Weapon
+            local Category = GetEquippedWeaponCategory(Char)
+            if Category and RunAnimationIds[Category] then
+                TargetId = RunAnimationIds[Category]
             end
-        else -- Idle
-            DesiredAnim = Anims.Idle
-            DesiredAnimType = "Idle"
-        end
-    else
-        -- Fallback Logic
-        if MoveDirection.Magnitude > 0 and Speed > 18 then
-            DesiredAnim = (Char:FindFirstChild("Pickaxe") or Char:FindFirstChild("Weapon")) and Anim_RunTool or Anim_RunDefault
-            DesiredAnimType = "RunDefault"
-        end
-    end
-
-    -- Play/Stop Logic
-    if DesiredAnim then
-        -- If we are playing the WRONG animation, stop it
-        if CurrentAnimTrack and CurrentAnimTrack.Animation.AnimationId ~= DesiredAnim.AnimationId then
-            CurrentAnimTrack:Stop(0.2)
-            CurrentAnimTrack = nil
         end
 
-        -- If nothing is playing, play new one
-        if not CurrentAnimTrack or not CurrentAnimTrack.IsPlaying then
+        -- Play if not already playing
+        if CurrentAnimId ~= TargetId or (CurrentAnimTrack and not CurrentAnimTrack.IsPlaying) then
+            if CurrentAnimTrack then CurrentAnimTrack:Stop(0.2) end
+            
+            local NewAnim = Instance.new("Animation")
+            NewAnim.AnimationId = TargetId
+            
             pcall(function()
-                CurrentAnimTrack = Animator:LoadAnimation(DesiredAnim)
+                CurrentAnimTrack = Animator:LoadAnimation(NewAnim)
                 CurrentAnimTrack.Priority = Enum.AnimationPriority.Action
                 CurrentAnimTrack.Looped = true
                 CurrentAnimTrack:Play(0.2)
+                CurrentAnimId = TargetId
             end)
         end
     else
-        -- Stop if no animation is desired (e.g. Idle with no weapon)
+        -- Stop Animation if not moving or not running
         if CurrentAnimTrack then
             CurrentAnimTrack:Stop(0.2)
             CurrentAnimTrack = nil
+            CurrentAnimId = nil
         end
     end
 end
@@ -427,7 +412,7 @@ end
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
     Title = "DonHub | The Forge",
-    SubTitle = "v1.1.0",
+    SubTitle = "v1.2.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -494,7 +479,7 @@ table.sort(MobOptions)
 
 Tabs.Main:AddParagraph({
     Title = "Welcome to DonHub",
-    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Individual Cooldowns)\n- Dynamic Weapon Animations\n- Mobile Support"
+    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Precision Timings)\n- Dynamic Weapon Animations\n- Mobile Support"
 })
 
 local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
@@ -563,7 +548,11 @@ task.spawn(function()
                 if Dist <= ParryConfig.DetectionRange then
                     if not ActiveMobConnections[Mob] then
                         ActiveMobConnections[Mob] = MobRoot.ChildAdded:Connect(function(Child)
-                            local Delay = ParryConfig.Delays[Child.Name]
+                            -- Construct Key: "MobName - SoundName"
+                            local CleanName = CleanMobName(Mob.Name)
+                            local Key = CleanName .. " - " .. Child.Name
+                            
+                            local Delay = ParryConfig.Delays[Key]
                             if Delay then
                                 task.spawn(function() PerformParry(Delay) end)
                             end
@@ -593,9 +582,22 @@ task.spawn(function()
     while true do
         task.wait()
         
-        -- Animation Update Loop (Runs even if not farming, to handle manual movement animations)
+        -- Animation Update Loop
         if not IsParrying then
-            ManageRunState(Config.AutoFarmRocks or Config.AutoFarmMobs or (GetCharacter() and GetCharacter():FindFirstChild("Humanoid") and GetCharacter().Humanoid.MoveDirection.Magnitude > 0))
+            -- Check if we are farming OR if the player is manually moving
+            local ShouldRun = Config.AutoFarmRocks or Config.AutoFarmMobs
+            
+            -- If not farming, check manual movement
+            if not ShouldRun then
+                local Char = GetCharacter()
+                if Char and Char:FindFirstChild("Humanoid") then
+                    if Char.Humanoid.MoveDirection.Magnitude > 0 then
+                        ShouldRun = true
+                    end
+                end
+            end
+            
+            ManageRunState(ShouldRun)
         end
 
         if IsParrying then 
@@ -645,7 +647,8 @@ task.spawn(function()
                         })
                         PathfindTo(CurrentTarget)
                     else
-                        ManageRunState(false) -- Stop running animation, switch to idle/combat
+                        -- Stop running animation when we reach target and stop moving
+                        ManageRunState(false) 
                         Char.Humanoid:MoveTo(Root.Position)
                         
                         local LookPos = CurrentTarget.Position
@@ -688,10 +691,6 @@ task.spawn(function()
             else
                 task.wait(1)
             end
-        else
-            -- Manual Movement Animation Handling
-            -- If not farming, we still want animations to work if user moves manually
-            -- ManageRunState is called at top of loop
         end
     end
 end)
@@ -716,6 +715,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub",
-    Content = "Loaded v1.1.0 Successfully!",
+    Content = "Loaded v1.2.0 Successfully!",
     Duration = 5
 })
