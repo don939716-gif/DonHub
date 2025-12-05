@@ -1,6 +1,6 @@
 --[[
     DonHub - The Forge Script Hub
-    Version: v1.5.0
+    Version: v1.6.0
     Author: Don
     License: Private
 ]]
@@ -42,7 +42,6 @@ local ParryConfig = {
     Enabled = true,
     DetectionRange = 10,
     BlockDuration = 0.25, 
-    TimingMultiplier = 0.6, -- Cuts time down to 60%
     
     -- Format: ["MobName - SoundName"] = RawDelaySeconds
     Delays = {
@@ -126,7 +125,7 @@ function GetEquippedWeaponCategory(Char)
     return nil
 end
 
--- Speed & Animation Manager (REVERTED TO OLDHUB STYLE)
+-- Speed & Animation Manager
 function ManageRunState(ShouldRun)
     local Char = GetCharacter()
     if not Char then return end
@@ -164,16 +163,14 @@ function ManageRunState(ShouldRun)
 
         -- 3. Play Animation
         if Animator then
-            -- If we are already playing an animation, check if it's the RIGHT one
             if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then
                 if CurrentAnimID == DesiredID then
-                    return -- Correct animation is already playing
+                    return 
                 else
-                    CurrentAnimTrack:Stop() -- Wrong animation (e.g. switched weapon), stop it
+                    CurrentAnimTrack:Stop() 
                 end
             end
 
-            -- Load and Play
             pcall(function()
                 local AnimObj = Instance.new("Animation")
                 AnimObj.AnimationId = DesiredID
@@ -312,8 +309,11 @@ function PerformParry(RawDelay)
     if IsParrying then return end
     IsParrying = true
     
-    -- Apply 60% Multiplier
-    local AdjustedDelay = RawDelay * ParryConfig.TimingMultiplier
+    -- Logic: 0.6 factor. If result > 0.4s, use 0.3 factor instead.
+    local CalculatedDelay = RawDelay * 0.6
+    if CalculatedDelay > 0.4 then
+        CalculatedDelay = RawDelay * 0.3
+    end
 
     -- Stop Movement
     local Char = GetCharacter()
@@ -323,7 +323,7 @@ function PerformParry(RawDelay)
     ManageRunState(false)
 
     -- Wait Windup
-    task.wait(AdjustedDelay)
+    task.wait(CalculatedDelay)
 
     -- Block
     pcall(function()
@@ -337,6 +337,10 @@ function PerformParry(RawDelay)
     pcall(function()
         game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StopBlock:InvokeServer()
     end)
+
+    -- Counter Attack Immediately
+    local ToolName = Config.AutoFarmMobs and "Weapon" or "Pickaxe"
+    SwingTool(ToolName)
 
     IsParrying = false
 end
@@ -354,6 +358,9 @@ function PathfindTo(TargetPart)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
+    -- Disable AutoJump to prevent edge hesitation
+    Humanoid.AutoJumpEnabled = false
+
     local Path = PathfindingService:CreatePath({
         AgentRadius = 3,
         AgentHeight = 5,
@@ -369,7 +376,6 @@ function PathfindTo(TargetPart)
     if Success and Path.Status == Enum.PathStatus.Success then
         local Waypoints = Path:GetWaypoints()
         
-        -- START RUNNING (Imperative Call)
         ManageRunState(true)
 
         for i, Waypoint in pairs(Waypoints) do
@@ -384,11 +390,13 @@ function PathfindTo(TargetPart)
 
             Humanoid:MoveTo(Waypoint.Position)
             
+            -- Jump Logic
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
                 Humanoid.Jump = true
             end
-            
-            local Timeout = 0
+
+            -- Stuck/Obstacle Detection
+            local StuckTime = 0
             while (Config.AutoFarmRocks or Config.AutoFarmMobs) do
                 if IsParrying then 
                     Humanoid:MoveTo(Root.Position)
@@ -398,9 +406,17 @@ function PathfindTo(TargetPart)
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
                 if DistToWaypoint < 4 then break end
                 
-                Timeout = Timeout + 0.1
-                if Timeout > 2 then break end
-
+                -- Check if stuck (Low velocity but trying to move)
+                if Root.Velocity.Magnitude < 1 then
+                    StuckTime = StuckTime + 0.1
+                    if StuckTime > 0.5 then
+                        Humanoid.Jump = true -- Force jump over obstacle
+                        StuckTime = 0
+                    end
+                else
+                    StuckTime = 0
+                end
+                
                 if (Root.Position - TargetPart.Position).Magnitude < Config.AttackDistance then
                     return
                 end
@@ -417,7 +433,7 @@ end
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
     Title = "DonHub | The Forge",
-    SubTitle = "v1.5.0",
+    SubTitle = "v1.6.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = true,
@@ -462,6 +478,15 @@ ToggleBtn.MouseButton1Click:Connect(function()
     Window:Minimize()
 end)
 
+--// CLEANUP FUNCTION \\--
+local function UnloadScript()
+    Config.AutoFarmRocks = false
+    Config.AutoFarmMobs = false
+    ParryConfig.Enabled = false
+    ManageRunState(false)
+    if ScreenGui then ScreenGui:Destroy() end
+end
+
 --// DATA LOADING \\--
 
 local RockOptions = {}
@@ -484,7 +509,7 @@ table.sort(MobOptions)
 
 Tabs.Main:AddParagraph({
     Title = "Welcome to DonHub",
-    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Precision Timings)\n- Dynamic Weapon Animations\n- Mobile Support"
+    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Smart Timing)\n- Counter Attack\n- Mobile Support"
 })
 
 local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
@@ -536,14 +561,15 @@ Tabs.Settings:AddButton({
     Title = "Unload Script",
     Description = "Destroys the UI and stops the script.",
     Callback = function()
-        Config.AutoFarmRocks = false
-        Config.AutoFarmMobs = false
-        ParryConfig.Enabled = false
-        ManageRunState(false)
-        ScreenGui:Destroy()
+        UnloadScript()
         Fluent:Destroy()
     end
 })
+
+-- Hook into Fluent's Unload Event (Triggers on X click)
+Window:OnUnload(function()
+    UnloadScript()
+end)
 
 --// PARRY SYSTEM \\--
 
@@ -703,12 +729,13 @@ SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
+SaveManager:SetFolder("DonHub") -- Single Config Folder
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub",
-    Content = "Loaded v1.5.0 Successfully!",
+    Content = "Loaded v1.6.0 Successfully!",
     Duration = 5
 })
