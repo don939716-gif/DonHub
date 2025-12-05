@@ -69,8 +69,12 @@ local ParryConfig = {
 }
 
 --// ASSET CACHING \\--
-local WeaponMap = {} -- [WeaponName] = CategoryName
-local RunAnimationIds = {} -- [Category] = AnimationId String
+local WeaponMap = {} 
+local RunAnimationIds = {} 
+
+-- Default Animations
+local ID_RunDefault = "rbxassetid://120321298562953"
+local ID_RunPickaxe = "rbxassetid://91424712336158"
 
 -- Pre-scan Weapon Categories
 local EquipAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Equipments"):WaitForChild("Weapons")
@@ -89,17 +93,13 @@ for _, CategoryFolder in pairs(AnimAssets:GetChildren()) do
     end
 end
 
--- Default IDs
-local ID_RunDefault = "rbxassetid://120321298562953"
-local ID_RunPickaxe = "rbxassetid://91424712336158"
-
 --// STATE VARIABLES \\--
 local CurrentTarget = nil 
 local CurrentAnimTrack = nil
 local CurrentAnimID = nil
 local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
 local IsParrying = false
-local ActiveMobConnections = {} -- [Model] = Connection
+local ActiveMobConnections = {} 
 
 --// HELPER FUNCTIONS \\--
 
@@ -299,6 +299,9 @@ function GetClosestMob()
 end
 
 function SwingTool(ToolName)
+    -- Safety check: Don't swing if we are parrying
+    if IsParrying then return end
+    
     local args = { ToolName }
     pcall(function()
         game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.ToolActivated:InvokeServer(unpack(args))
@@ -309,11 +312,13 @@ function PerformParry(RawDelay)
     if IsParrying then return end
     IsParrying = true
     
-    -- Logic: 0.6 factor. If result > 0.4s, use 0.3 factor instead.
-    local CalculatedDelay = RawDelay * 0.6
-    if CalculatedDelay > 0.4 then
-        CalculatedDelay = RawDelay * 0.3
+    -- New Timing Logic
+    local Factor = 0.6
+    if (RawDelay * 0.6) > 0.4 then
+        Factor = 0.3
     end
+    
+    local WaitTime = RawDelay * Factor
 
     -- Stop Movement
     local Char = GetCharacter()
@@ -323,7 +328,7 @@ function PerformParry(RawDelay)
     ManageRunState(false)
 
     -- Wait Windup
-    task.wait(CalculatedDelay)
+    task.wait(WaitTime)
 
     -- Block
     pcall(function()
@@ -338,11 +343,29 @@ function PerformParry(RawDelay)
         game:GetService("ReplicatedStorage").Shared.Packages.Knit.Services.ToolService.RF.StopBlock:InvokeServer()
     end)
 
-    -- Counter Attack Immediately
-    local ToolName = Config.AutoFarmMobs and "Weapon" or "Pickaxe"
-    SwingTool(ToolName)
-
     IsParrying = false
+end
+
+function CheckObstaclesAndJump(Char)
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    local Humanoid = Char:FindFirstChild("Humanoid")
+    if not Root or not Humanoid then return end
+    
+    -- Only check if moving
+    if Humanoid.MoveDirection.Magnitude > 0 then
+        local RayOrigin = Root.Position
+        local RayDir = Root.CFrame.LookVector * 3 -- Check 3 studs ahead
+        
+        local Params = RaycastParams.new()
+        Params.FilterDescendantsInstances = {Char}
+        Params.FilterType = Enum.RaycastFilterType.Exclude
+        
+        local Result = Workspace:Raycast(RayOrigin, RayDir, Params)
+        if Result then
+            Humanoid.Jump = true
+        end
+    end
 end
 
 function PathfindTo(TargetPart)
@@ -358,13 +381,11 @@ function PathfindTo(TargetPart)
         pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
     end
 
-    -- Disable AutoJump to prevent edge hesitation
-    Humanoid.AutoJumpEnabled = false
-
     local Path = PathfindingService:CreatePath({
         AgentRadius = 3,
         AgentHeight = 5,
         AgentCanJump = true,
+        AgentCanDrop = true, -- Allow walking off ledges
         WaypointSpacing = 8,
         Costs = { Water = 20 }
     })
@@ -390,13 +411,14 @@ function PathfindTo(TargetPart)
 
             Humanoid:MoveTo(Waypoint.Position)
             
-            -- Jump Logic
+            -- Obstacle Check
+            CheckObstaclesAndJump(Char)
+            
             if Waypoint.Action == Enum.PathWaypointAction.Jump then
                 Humanoid.Jump = true
             end
-
-            -- Stuck/Obstacle Detection
-            local StuckTime = 0
+            
+            local Timeout = 0
             while (Config.AutoFarmRocks or Config.AutoFarmMobs) do
                 if IsParrying then 
                     Humanoid:MoveTo(Root.Position)
@@ -406,17 +428,9 @@ function PathfindTo(TargetPart)
                 local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
                 if DistToWaypoint < 4 then break end
                 
-                -- Check if stuck (Low velocity but trying to move)
-                if Root.Velocity.Magnitude < 1 then
-                    StuckTime = StuckTime + 0.1
-                    if StuckTime > 0.5 then
-                        Humanoid.Jump = true -- Force jump over obstacle
-                        StuckTime = 0
-                    end
-                else
-                    StuckTime = 0
-                end
-                
+                Timeout = Timeout + 0.1
+                if Timeout > 2 then break end
+
                 if (Root.Position - TargetPart.Position).Magnitude < Config.AttackDistance then
                     return
                 end
@@ -427,6 +441,7 @@ function PathfindTo(TargetPart)
     else
         ManageRunState(true)
         Humanoid:MoveTo(TargetPart.Position)
+        CheckObstaclesAndJump(Char)
     end
 end
 
@@ -478,14 +493,21 @@ ToggleBtn.MouseButton1Click:Connect(function()
     Window:Minimize()
 end)
 
---// CLEANUP FUNCTION \\--
-local function UnloadScript()
-    Config.AutoFarmRocks = false
-    Config.AutoFarmMobs = false
-    ParryConfig.Enabled = false
-    ManageRunState(false)
-    if ScreenGui then ScreenGui:Destroy() end
-end
+-- Cleanup Monitor
+-- Checks if the Fluent Window is destroyed (by X) and cleans up the mobile button
+task.spawn(function()
+    while ScreenGui.Parent do
+        task.wait(1)
+        -- If Fluent's main GUI is gone (it usually names it 'ScreenGui' in CoreGui, but we can check if Window is active)
+        -- Since we can't easily access Fluent's internal instance, we rely on the Unload button mostly,
+        -- but we can check if the script is disabled or if we should force cleanup.
+        -- For now, the Unload button is the primary method, but we add this safety:
+        if not Window then 
+            ScreenGui:Destroy()
+            break
+        end
+    end
+end)
 
 --// DATA LOADING \\--
 
@@ -509,7 +531,7 @@ table.sort(MobOptions)
 
 Tabs.Main:AddParagraph({
     Title = "Welcome to DonHub",
-    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Smart Timing)\n- Counter Attack\n- Mobile Support"
+    Content = "Select a farming mode from the tabs on the left.\n\nFeatures:\n- Auto Mine Rocks\n- Auto Farm Mobs\n- Auto Parry (Smart Timing)\n- Dynamic Weapon Animations\n- Mobile Support"
 })
 
 local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
@@ -561,15 +583,14 @@ Tabs.Settings:AddButton({
     Title = "Unload Script",
     Description = "Destroys the UI and stops the script.",
     Callback = function()
-        UnloadScript()
+        Config.AutoFarmRocks = false
+        Config.AutoFarmMobs = false
+        ParryConfig.Enabled = false
+        ManageRunState(false)
+        ScreenGui:Destroy()
         Fluent:Destroy()
     end
 })
-
--- Hook into Fluent's Unload Event (Triggers on X click)
-Window:OnUnload(function()
-    UnloadScript()
-end)
 
 --// PARRY SYSTEM \\--
 
@@ -729,7 +750,7 @@ SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
-SaveManager:SetFolder("DonHub") -- Single Config Folder
+SaveManager:SetFolder("DonHub") -- Fixed Config Folder Name
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
