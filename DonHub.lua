@@ -1,430 +1,255 @@
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
-local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+--[[
+    DonHub - Parry Timing Logger V5 (Distance Fixed)
+    Game: The Forge
+    Author: Don
+    
+    CHANGELOG:
+    - Added 15 Stud Distance Check.
+    - Reduced Sound Memory to 1.0s to prevent matching old swings.
+    - Ignores sounds if the player is too far away.
+]]
 
-local PathfindingService = game:GetService("PathfindingService")
+local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
---// CONFIGURATION \\--
-local Config = {
-    AutoFarm = false,
-    SelectedRocks = {},
-    AttackDistance = 7,
-    SwingDelay = 0.3,
-    RunSpeed = 21.69,
-    WalkSpeed = 11.79
-}
-
---// ANIMATION ASSETS \\--
-local Anim_RunDefault = Instance.new("Animation")
-Anim_RunDefault.AnimationId = "rbxassetid://120321298562953"
-
-local Anim_RunPickaxe = Instance.new("Animation")
-Anim_RunPickaxe.AnimationId = "rbxassetid://91424712336158"
-
---// STATE VARIABLES \\--
-local CurrentTarget = nil -- The rock we are currently locked onto
-local CurrentAnimTrack = nil
-local SpeedState = { Connection = nil, Humanoid = nil, IsRunning = false }
-
---// UI SETUP \\--
-local Window = Fluent:CreateWindow({
-    Title = "The Forge | Script Hub V11",
-    SubTitle = "by DonHub",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
-})
-
-local Tabs = {
-    Farm = Window:AddTab({ Title = "Auto Farm", Icon = "pickaxe" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
-}
-
--- Get Rock Names
-local RockOptions = {}
-local RocksAssetFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Rocks")
-
-for _, rock in pairs(RocksAssetFolder:GetChildren()) do
-    table.insert(RockOptions, rock.Name)
-end
-table.sort(RockOptions)
-
---// UI ELEMENTS \\--
-
-local RockDropdown = Tabs.Farm:AddDropdown("RockSelection", {
-    Title = "Select Rocks",
-    Description = "Select multiple rocks to farm.",
-    Values = RockOptions,
-    Multi = true,
-    Default = {},
-})
-
-RockDropdown:OnChanged(function(Value)
-    -- Fluent returns a table like { ["Pebble"] = true, ["Rock"] = false }
-    Config.SelectedRocks = {}
-    for Name, Selected in pairs(Value) do
-        if Selected then
-            table.insert(Config.SelectedRocks, Name)
-        end
+--// CLEANUP OLD INSTANCES \\--
+if getgenv().DonHubLoggerConnections then
+    for _, connection in pairs(getgenv().DonHubLoggerConnections) do
+        if connection then connection:Disconnect() end
     end
+end
+getgenv().DonHubLoggerConnections = {}
+
+local OldUI = CoreGui:FindFirstChild("DonHub_ParryLogger_V5")
+if OldUI then OldUI:Destroy() end
+
+--// UI CREATION \\--
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "DonHub_ParryLogger_V5"
+if RunService:IsStudio() then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+else
+    ScreenGui.Parent = CoreGui
+end
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.7, 0, 0.1, 0)
+MainFrame.Size = UDim2.new(0, 350, 0, 400)
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+local Title = Instance.new("TextLabel")
+Title.Parent = MainFrame
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.Font = Enum.Font.GothamBold
+Title.Text = "Parry Logger v5 (Max 15 Studs)"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 14
+
+local Scroll = Instance.new("ScrollingFrame")
+Scroll.Parent = MainFrame
+Scroll.BackgroundTransparency = 1
+Scroll.Position = UDim2.new(0, 10, 0, 40)
+Scroll.Size = UDim2.new(1, -20, 1, -90)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+Scroll.ScrollBarThickness = 4
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = Scroll
+UIListLayout.SortOrder = Enum.SortOrder.Name
+UIListLayout.Padding = UDim.new(0, 5)
+
+UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
 end)
 
-local FarmToggle = Tabs.Farm:AddToggle("AutoFarm", {Title = "Enable AI Auto Farm", Default = false })
+local CopyBtn = Instance.new("TextButton")
+CopyBtn.Parent = MainFrame
+CopyBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+CopyBtn.Position = UDim2.new(0, 10, 1, -40)
+CopyBtn.Size = UDim2.new(0.45, 0, 0, 30)
+CopyBtn.Font = Enum.Font.GothamBold
+CopyBtn.Text = "Copy Table"
+CopyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CopyBtn.TextSize = 14
 
-FarmToggle:OnChanged(function(Value)
-    Config.AutoFarm = Value
-    
-    pcall(function()
-        if Value then
-            print("Auto Farm Started")
-        else
-            -- Reset everything when disabled
-            CurrentTarget = nil
-            ManageRunState(false)
-            local Char = GetCharacter()
-            if Char and Char:FindFirstChild("Humanoid") then
-                Char.Humanoid:MoveTo(Char.HumanoidRootPart.Position)
-            end
-        end
-    end)
-end)
+local ClearBtn = Instance.new("TextButton")
+ClearBtn.Parent = MainFrame
+ClearBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+ClearBtn.Position = UDim2.new(0.55, 0, 1, -40)
+ClearBtn.Size = UDim2.new(0.45, 0, 0, 30)
+ClearBtn.Font = Enum.Font.GothamBold
+ClearBtn.Text = "Reset"
+ClearBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClearBtn.TextSize = 14
 
---// HELPER FUNCTIONS \\--
+--// LOGIC VARIABLES \\--
+local LoggedData = {} 
+local RecentSounds = {} 
+local MaxSoundAge = 1.0 -- Reduced from 2.0 to 1.0 for tighter accuracy
+local OldHealth = 0
 
-function GetCharacter()
-    if Workspace:FindFirstChild("Living") then
-        local LivingChar = Workspace.Living:FindFirstChild(LocalPlayer.Name)
-        if LivingChar then return LivingChar end
-    end
-    return LocalPlayer.Character
+--// FUNCTIONS \\--
+
+function CleanMobName(Name)
+    return string.gsub(Name, "%d+$", "")
 end
 
-function EquipPickaxe()
-    local Char = GetCharacter()
-    if not Char then return end
-    if Char:FindFirstChild("Pickaxe") then return end
-
-    local Backpack = LocalPlayer:FindFirstChild("Backpack")
-    if Backpack and Backpack:FindFirstChild("Pickaxe") then
-        Backpack.Pickaxe.Parent = Char
-    end
-end
-
--- Speed & Animation Manager
-function ManageRunState(ShouldRun)
-    local Char = GetCharacter()
-    if not Char then return end
-    local Humanoid = Char:FindFirstChild("Humanoid")
-    local Animator = Humanoid and Humanoid:FindFirstChild("Animator")
+local function UpdateUI(MobName, SoundName, Delay)
+    local FormattedDelay = string.format("%.3f", Delay)
+    local Key = MobName .. " - " .. SoundName
     
-    if not Humanoid then return end
-
-    if ShouldRun then
-        -- Force Speed
-        if SpeedState.Humanoid ~= Humanoid or not SpeedState.IsRunning then
-            if SpeedState.Connection then SpeedState.Connection:Disconnect() end
-
-            local function EnforceSpeed()
-                if Humanoid.WalkSpeed ~= Config.RunSpeed then
-                    Humanoid.WalkSpeed = Config.RunSpeed
-                end
-            end
-            EnforceSpeed()
-            SpeedState.Connection = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(EnforceSpeed)
-            SpeedState.Humanoid = Humanoid
-            SpeedState.IsRunning = true
-        end
-
-        -- Play Animation
-        if CurrentAnimTrack and CurrentAnimTrack.IsPlaying then return end
-
-        if Animator then
-            local AnimationToLoad = Anim_RunDefault
-            if Char:FindFirstChild("Pickaxe") then
-                AnimationToLoad = Anim_RunPickaxe
-            end
-            pcall(function()
-                CurrentAnimTrack = Animator:LoadAnimation(AnimationToLoad)
-                CurrentAnimTrack.Priority = Enum.AnimationPriority.Action 
-                CurrentAnimTrack.Looped = true
-                CurrentAnimTrack:Play()
-            end)
-        end
-    else
-        -- Stop Speed
-        if SpeedState.Connection then
-            SpeedState.Connection:Disconnect()
-            SpeedState.Connection = nil
-        end
-        SpeedState.IsRunning = false
-        SpeedState.Humanoid = nil
-        Humanoid.WalkSpeed = Config.WalkSpeed
-
-        -- Stop Animation
-        if CurrentAnimTrack then
-            CurrentAnimTrack:Stop()
-            CurrentAnimTrack = nil
-        end
-    end
-end
-
-function IsRockBroken(Hitbox)
-    if not Hitbox or not Hitbox.Parent then return true end
-    local RockModel = Hitbox.Parent
-    
-    local InfoFrame = RockModel:FindFirstChild("infoFrame")
-    if InfoFrame then
-        local Frame = InfoFrame:FindFirstChild("Frame")
-        if Frame then
-            local HPLabel = Frame:FindFirstChild("rockHP")
-            if HPLabel then
-                if HPLabel.Text == "0 HP" or string.sub(HPLabel.Text, 1, 2) == "0/" then
-                    return true
-                end
-            end
-        end
-    end
-    return false
-end
-
-function GetClosestRock()
-    local Char = GetCharacter()
-    local Root = Char and Char:FindFirstChild("HumanoidRootPart")
-    if not Root then return nil end
-
-    local ClosestRock = nil
-    local ClosestDist = math.huge
-
-    local RocksFolder = Workspace:FindFirstChild("Rocks")
-    if not RocksFolder then return nil end
-    
-    for _, Area in pairs(RocksFolder:GetChildren()) do
-        for _, Container in pairs(Area:GetChildren()) do
-            for _, Item in pairs(Container:GetChildren()) do
-                -- Check if name is in our selected list
-                if table.find(Config.SelectedRocks, Item.Name) and Item:FindFirstChild("Hitbox") then
-                    local Hitbox = Item.Hitbox
-                    -- IMPORTANT: Don't select broken rocks
-                    if not IsRockBroken(Hitbox) then
-                        local Dist = (Root.Position - Hitbox.Position).Magnitude
-                        
-                        if Dist < ClosestDist then
-                            ClosestDist = Dist
-                            ClosestRock = Hitbox
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    return ClosestRock
-end
-
-function MineRock()
-    local args = { "Pickaxe" }
-    pcall(function()
-        game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Packages"):WaitForChild("Knit"):WaitForChild("Services"):WaitForChild("ToolService"):WaitForChild("RF"):WaitForChild("ToolActivated"):InvokeServer(unpack(args))
-    end)
-end
-
-function PathfindTo(TargetHitbox)
-    local Char = GetCharacter()
-    if not Char then return end
-    
-    local Root = Char:FindFirstChild("HumanoidRootPart")
-    local Humanoid = Char:FindFirstChild("Humanoid")
-    
-    if not Root or not Humanoid then return end
-
-    if Root.Anchored == false then
-        pcall(function() Root:SetNetworkOwner(LocalPlayer) end)
-    end
-
-    local Path = PathfindingService:CreatePath({
-        AgentRadius = 3,
-        AgentHeight = 5,
-        AgentCanJump = true,
-        WaypointSpacing = 8,
-        Costs = { Water = 20 }
-    })
-
-    local Success, ErrorMessage = pcall(function()
-        Path:ComputeAsync(Root.Position, TargetHitbox.Position)
-    end)
-
-    if Success and Path.Status == Enum.PathStatus.Success then
-        local Waypoints = Path:GetWaypoints()
+    if LoggedData[Key] then
+        -- Update Existing
+        LoggedData[Key].Time = Delay
+        LoggedData[Key].Label.Text = string.format("%s : %ss", Key, FormattedDelay)
         
-        ManageRunState(true)
-
-        for i, Waypoint in pairs(Waypoints) do
-            if not Config.AutoFarm then break end
-            if not Char or not Char.Parent then break end
-            
-            -- Stop if target is broken while moving
-            if IsRockBroken(TargetHitbox) then return end
-
-            -- "Walk Past" Logic:
-            -- If we find a DIFFERENT rock that is very close while running, switch to it.
-            -- We only do this if we are NOT already close to our target.
-            local DistToTarget = (Root.Position - TargetHitbox.Position).Magnitude
-            if DistToTarget > 20 then
-                 local NearbyRock = GetClosestRock()
-                 if NearbyRock and NearbyRock ~= TargetHitbox then
-                     local DistToNearby = (Root.Position - NearbyRock.Position).Magnitude
-                     if DistToNearby < Config.AttackDistance then
-                         -- We found a closer rock on the way! Switch target.
-                         CurrentTarget = NearbyRock
-                         return 
-                     end
-                 end
-            end
-
-            Humanoid:MoveTo(Waypoint.Position)
-            
-            if Waypoint.Action == Enum.PathWaypointAction.Jump then
-                Humanoid.Jump = true
-            end
-            
-            local Timeout = 0
-            while Config.AutoFarm do
-                local DistToWaypoint = (Root.Position - Waypoint.Position).Magnitude
-                if DistToWaypoint < 4 then break end
-                
-                Timeout = Timeout + 0.1
-                if Timeout > 2 then break end
-
-                -- Check if we reached the target early
-                if (Root.Position - TargetHitbox.Position).Magnitude < Config.AttackDistance then
-                    return
-                end
-                
-                task.wait(0.1)
-            end
-        end
+        task.spawn(function()
+            LoggedData[Key].Label.TextColor3 = Color3.fromRGB(0, 255, 0)
+            task.wait(0.2)
+            LoggedData[Key].Label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end)
     else
-        ManageRunState(true)
-        Humanoid:MoveTo(TargetHitbox.Position)
+        -- Create New
+        local Label = Instance.new("TextLabel")
+        Label.Name = Key 
+        Label.Parent = Scroll
+        Label.BackgroundTransparency = 1
+        Label.Size = UDim2.new(1, 0, 0, 20)
+        Label.Font = Enum.Font.Code
+        Label.Text = string.format("%s : %ss", Key, FormattedDelay)
+        Label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.TextSize = 11 
+        
+        LoggedData[Key] = {
+            Time = Delay,
+            Label = Label
+        }
     end
 end
 
---// MAIN LOOP \\--
+local function MonitorMob(Mob)
+    if not Mob:FindFirstChild("HumanoidRootPart") then return end
+    
+    local CleanName = CleanMobName(Mob.Name)
+    
+    local Conn = Mob.HumanoidRootPart.ChildAdded:Connect(function(Child)
+        if Child:IsA("Sound") and string.find(Child.Name, "Swing") then
+            
+            -- DISTANCE CHECK: Only record if player is close (15 studs)
+            local MyChar = LocalPlayer.Character
+            if MyChar and MyChar:FindFirstChild("HumanoidRootPart") and Mob:FindFirstChild("HumanoidRootPart") then
+                local Dist = (MyChar.HumanoidRootPart.Position - Mob.HumanoidRootPart.Position).Magnitude
+                
+                if Dist <= 15 then
+                    table.insert(RecentSounds, {
+                        Mob = CleanName,
+                        Sound = Child.Name,
+                        Time = os.clock()
+                    })
+                end
+            end
+        end
+    end)
+    
+    table.insert(getgenv().DonHubLoggerConnections, Conn)
+end
 
-task.spawn(function()
+--// LISTENERS \\--
+
+-- 1. Damage Listener
+local DamageConn = RunService.Heartbeat:Connect(function()
+    local Char = LocalPlayer.Character
+    if Char and Char:FindFirstChild("Humanoid") then
+        local Hum = Char.Humanoid
+        
+        if OldHealth == 0 then OldHealth = Hum.Health end
+        
+        if Hum.Health < OldHealth then
+            local HitTime = os.clock()
+            local BestMatch = nil
+            local ShortestDiff = MaxSoundAge
+            
+            for i = #RecentSounds, 1, -1 do
+                local SoundData = RecentSounds[i]
+                local Diff = HitTime - SoundData.Time
+                
+                -- Only match if sound happened BEFORE hit and within 1 second
+                if Diff > 0 and Diff < ShortestDiff then
+                    ShortestDiff = Diff
+                    BestMatch = SoundData
+                end
+            end
+            
+            if BestMatch then
+                UpdateUI(BestMatch.Mob, BestMatch.Sound, ShortestDiff)
+                RecentSounds = {} -- Clear immediately to prevent stale data
+            end
+        end
+        
+        OldHealth = Hum.Health
+    end
+end)
+table.insert(getgenv().DonHubLoggerConnections, DamageConn)
+
+-- 2. Cleanup Old Sounds
+local CleanupConn = task.spawn(function()
     while true do
-        task.wait() -- Main loop speed
-        
-        if Config.AutoFarm then
-            local Char = GetCharacter()
-            
-            if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") and Char.Humanoid.Health > 0 then
-                EquipPickaxe()
-                
-                -- 1. TARGET VALIDATION
-                -- If we have a target, check if it's still valid
-                if CurrentTarget then
-                    if IsRockBroken(CurrentTarget) or not CurrentTarget.Parent then
-                        CurrentTarget = nil -- Target died, clear it
-                    else
-                        -- Check if we somehow got too far from it (e.g. fell off cliff)
-                        local Dist = (Char.HumanoidRootPart.Position - CurrentTarget.Position).Magnitude
-                        if Dist > 200 then 
-                            CurrentTarget = nil -- Abandon target if absurdly far
-                        end
-                    end
-                end
-
-                -- 2. TARGET ACQUISITION
-                -- Only look for a new target if we don't have one
-                if not CurrentTarget then
-                    CurrentTarget = GetClosestRock()
-                end
-                
-                -- 3. EXECUTION
-                if CurrentTarget then
-                    local Root = Char.HumanoidRootPart
-                    local Distance = (Root.Position - CurrentTarget.Position).Magnitude
-                    
-                    if Distance > Config.AttackDistance then
-                        -- RUNNING STATE
-                        Fluent:Notify({
-                            Title = "Farming",
-                            Content = "Running to " .. CurrentTarget.Parent.Name,
-                            Duration = 1
-                        })
-                        PathfindTo(CurrentTarget)
-                    else
-                        -- MINING STATE
-                        ManageRunState(false) -- Stop running
-                        Char.Humanoid:MoveTo(Root.Position) -- Stop moving
-                        
-                        -- Face Rock ONCE
-                        local LookPos = CurrentTarget.Position
-                        Root.CFrame = CFrame.new(Root.Position, Vector3.new(LookPos.X, Root.Position.Y, LookPos.Z))
-                        
-                        -- Mine until broken or disabled
-                        -- We use a loop here to stay focused on THIS rock
-                        while Config.AutoFarm and CurrentTarget and CurrentTarget.Parent do
-                            if IsRockBroken(CurrentTarget) then
-                                CurrentTarget = nil -- Mark as done
-                                break 
-                            end
-
-                            -- Anti-Twitch: Only correct angle if pushed significantly
-                            local CurrentLook = Root.CFrame.LookVector
-                            local TargetDir = (CurrentTarget.Position - Root.Position).Unit
-                            local DotProduct = CurrentLook.X * TargetDir.X + CurrentLook.Z * TargetDir.Z
-                            if DotProduct < 0.5 then
-                                Root.CFrame = CFrame.new(Root.Position, Vector3.new(CurrentTarget.Position.X, Root.Position.Y, CurrentTarget.Position.Z))
-                            end
-
-                            -- Jump if high
-                            if CurrentTarget.Position.Y > (Root.Position.Y + 3.5) then
-                                Char.Humanoid.Jump = true
-                            end
-
-                            MineRock()
-                            task.wait(Config.SwingDelay)
-                            
-                            -- Safety Checks
-                            if not Char or not Char.Parent or Char.Humanoid.Health <= 0 then break end
-                            if (Root.Position - CurrentTarget.Position).Magnitude > Config.AttackDistance + 5 then break end
-                        end
-                    end
-                else
-                    -- No targets found
-                    ManageRunState(false)
-                    task.wait(0.5)
-                end
-            else
-                task.wait(1)
+        task.wait(0.2) -- Check more frequently
+        local Now = os.clock()
+        for i = #RecentSounds, 1, -1 do
+            if (Now - RecentSounds[i].Time) > MaxSoundAge then
+                table.remove(RecentSounds, i)
             end
-        else
-            ManageRunState(false)
         end
     end
 end)
 
---// SAVE MANAGER \\--
-SaveManager:SetLibrary(Fluent)
-InterfaceManager:SetLibrary(Fluent)
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({})
-InterfaceManager:BuildInterfaceSection(Tabs.Settings)
-SaveManager:BuildConfigSection(Tabs.Settings)
+-- 3. Monitor Mobs
+local Living = Workspace:WaitForChild("Living")
+for _, Mob in pairs(Living:GetChildren()) do
+    if not Players:GetPlayerFromCharacter(Mob) then
+        MonitorMob(Mob)
+    end
+end
 
-Window:SelectTab(1)
-Fluent:Notify({
-    Title = "The Forge Hub",
-    Content = "Script Loaded Successfully!",
-    Duration = 5
-})
+local LivingConn = Living.ChildAdded:Connect(function(Mob)
+    if not Players:GetPlayerFromCharacter(Mob) then
+        MonitorMob(Mob)
+    end
+end)
+table.insert(getgenv().DonHubLoggerConnections, LivingConn)
+
+--// BUTTONS \\--
+
+CopyBtn.MouseButton1Click:Connect(function()
+    local Lines = {}
+    for Key, Data in pairs(LoggedData) do
+        -- Format: ["MobName - SoundName"] = 0.123,
+        table.insert(Lines, string.format("    [\"%s\"] = %.3f,", Key, Data.Time))
+    end
+    
+    local Result = table.concat(Lines, "\n")
+    setclipboard(Result)
+    
+    CopyBtn.Text = "Copied!"
+    task.wait(1)
+    CopyBtn.Text = "Copy Table"
+end)
+
+ClearBtn.MouseButton1Click:Connect(function()
+    LoggedData = {}
+    for _, child in pairs(Scroll:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+end)
