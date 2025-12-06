@@ -1,7 +1,10 @@
 --[[
-    DonHub - Headless Smart Hopper
+    DonHub - Headless Smart Hopper v1.1
     Type: Standalone Utility (No UI)
     Author: Don
+    
+    Updates:
+    - Added Auto-Reconnect Failsafe for Error 277/Disconnections.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,15 +13,16 @@ local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
+local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
 --// USER CONFIGURATION \\--
--- Set these to true/false based on what you are farming.
 local UserConfig = {
     Enabled = true,       -- Master switch
     HopDelay = 3,         -- Seconds to wait after clearing mobs before hopping
+    AutoReconnect = true, -- [NEW] Automatically rejoin if disconnected (Error 277, etc)
     
     Mobs = {
         -- World 1
@@ -55,12 +59,44 @@ local IsHopping = false
 
 --// NOTIFICATION HELPER \\--
 local function Notify(Title, Text)
-    StarterGui:SetCore("SendNotification", {
-        Title = Title,
-        Text = Text,
-        Duration = 5
-    })
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = Title,
+            Text = Text,
+            Duration = 5
+        })
+    end)
     print("[DonHub Hopper]: " .. Text)
+end
+
+--// AUTO RECONNECT FAILSAFE \\--
+if UserConfig.AutoReconnect then
+    task.spawn(function()
+        local PromptGui = CoreGui:WaitForChild("RobloxPromptGui", 10)
+        if not PromptGui then return end
+        
+        local Overlay = PromptGui:WaitForChild("promptOverlay", 10)
+        if not Overlay then return end
+
+        Notify("Failsafe", "Auto-Reconnect Active")
+
+        Overlay.ChildAdded:Connect(function(Child)
+            if Child.Name == "ErrorPrompt" then
+                -- Error Detected (Error 277, 267, etc.)
+                IsHopping = true -- Stop other logic
+                
+                -- Loop Rejoin Attempt
+                while true do
+                    print("Disconnected! Attempting to Rejoin...")
+                    local Success, Err = pcall(function()
+                        TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                    end)
+                    if Err then warn("Rejoin Failed: " .. tostring(Err)) end
+                    task.wait(5) -- Retry every 5 seconds
+                end
+            end
+        end)
+    end)
 end
 
 --// HELPER FUNCTIONS \\--
@@ -77,7 +113,6 @@ function GetMobCount()
     for _, Model in pairs(Living:GetChildren()) do
         if not Players:GetPlayerFromCharacter(Model) and Model:FindFirstChild("Humanoid") and Model.Humanoid.Health > 0 then
             local CleanName = CleanMobName(Model.Name)
-            -- Check if this specific mob is enabled in config
             if UserConfig.Mobs[CleanName] == true then
                 Count = Count + 1
             end
@@ -142,7 +177,7 @@ end
 
 --// MAIN LOOP \\--
 
-Notify("DonHub", "Headless Hopper Started")
+Notify("DonHub", "Headless Hopper v1.1 Started")
 
 task.spawn(function()
     while true do
@@ -154,36 +189,33 @@ task.spawn(function()
         local CurrentWorld = (game.PlaceId == WORLD_2_ID) and 2 or 1
 
         if MobsRemaining == 0 then
-            -- Wait delay to ensure spawns aren't just lagging
             task.wait(UserConfig.HopDelay)
             if GetMobCount() > 0 then continue end
 
             -- LOGIC TREE
             if WantsW1 and not WantsW2 then
-                -- CASE: Only W1 Mobs
+                -- Only W1 Mobs
                 if CurrentWorld == 1 then
-                    ServerHop() -- Smallest Server Hop
+                    ServerHop()
                 else
-                    TeleportToIsland(ARG_TO_W1) -- Go back to W1
+                    TeleportToIsland(ARG_TO_W1)
                 end
 
             elseif not WantsW1 and WantsW2 then
-                -- CASE: Only W2 Mobs
+                -- Only W2 Mobs
                 if CurrentWorld == 2 then
-                    TeleportToIsland(ARG_TO_W1) -- Go to W1 to reset (Loop)
+                    TeleportToIsland(ARG_TO_W1) -- Loop via W1
                 else
-                    TeleportToIsland(ARG_TO_W2) -- Go to W2
+                    TeleportToIsland(ARG_TO_W2)
                 end
 
             elseif WantsW1 and WantsW2 then
-                -- CASE: Mixed Mobs
+                -- Mixed Mobs
                 if CurrentWorld == 1 then
-                    TeleportToIsland(ARG_TO_W2) -- Finished W1, go W2
+                    TeleportToIsland(ARG_TO_W2)
                 else
-                    TeleportToIsland(ARG_TO_W1) -- Finished W2, go W1
+                    TeleportToIsland(ARG_TO_W1)
                 end
-            else
-                -- No mobs selected? Do nothing.
             end
         end
     end
