@@ -1,7 +1,14 @@
 --[[
-    DonHub - Smart Hopper
+    DonHub - Smart Hopper v1.2
     Type: Standalone Utility
     Author: Don
+    
+    INSTRUCTIONS FOR AUTO-EXECUTE:
+    1. Save this entire script as a file named "DonHub_Hopper.lua" 
+       inside your Executor's "workspace" or "scripts" folder.
+    2. Run it once. 
+    3. Configure your mobs. It will AUTO-SAVE.
+    4. When it hops, it will reload your settings automatically.
 ]]
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -39,18 +46,20 @@ local W2_MOBS = {
 local Config = {
     Enabled = false,
     SelectedMobs = {},
-    HopDelay = 3 -- Seconds to wait after clearing before hopping
+    HopDelay = 3, -- Seconds to wait after clearing before hopping
+    FileName = "DonHub_Hopper.lua" -- The name of the file you saved
 }
 
 --// STATE \\--
 local IsHopping = false
+local IsLoading = false -- Prevent saving while loading
 
 --// UI SETUP \\--
 local Window = Fluent:CreateWindow({
     Title = "DonHub | Smart Hopper",
-    SubTitle = "Utility",
+    SubTitle = "v1.2",
     TabWidth = 160,
-    Size = UDim2.fromOffset(480, 360), -- Smaller window for utility
+    Size = UDim2.fromOffset(480, 360),
     Acrylic = true,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
@@ -83,11 +92,37 @@ function GetMobCount()
     return Count
 end
 
+function TriggerAutoSave()
+    if not IsLoading then
+        SaveManager:Save("AutoSave")
+    end
+end
+
+--// AUTO EXECUTE LOGIC \\--
+function QueueAutoExecute()
+    local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport)
+    
+    if queue_on_teleport then
+        -- This script string runs immediately after teleporting
+        local Payload = [[
+            task.wait(5) -- Wait for game to load
+            local FileName = "]] .. Config.FileName .. [["
+            if isfile(FileName) then
+                loadstring(readfile(FileName))()
+            else
+                warn("DonHub AutoExec: Could not find file " .. FileName)
+            end
+        ]]
+        queue_on_teleport(Payload)
+    end
+end
+
 function TeleportToIsland(IslandName)
     if IsHopping then return end
     IsHopping = true
     
     Fluent:Notify({Title = "Hopper", Content = "Teleporting to " .. IslandName, Duration = 5})
+    QueueAutoExecute() -- Queue the script to run next server
     
     task.spawn(function()
         local Remote = ReplicatedStorage.Shared.Packages.Knit.Services.PortalService.RF.TeleportToIsland
@@ -107,6 +142,7 @@ function ServerHop()
     IsHopping = true
     
     Fluent:Notify({Title = "Hopper", Content = "Finding smallest server...", Duration = 10})
+    QueueAutoExecute() -- Queue the script to run next server
     
     task.spawn(function()
         while task.wait(1) do
@@ -146,12 +182,8 @@ task.spawn(function()
         local WantsW1, WantsW2 = AnalyzeIntent()
         local CurrentWorld = (game.PlaceId == WORLD_2_ID) and 2 or 1
 
-        -- Update Status UI (Optional, printed to console for now)
-        -- print("Mobs Left: " .. MobsRemaining .. " | W1: " .. tostring(WantsW1) .. " | W2: " .. tostring(WantsW2))
-
         if MobsRemaining == 0 then
             task.wait(Config.HopDelay)
-            -- Double check after delay
             if GetMobCount() > 0 then continue end
 
             -- LOGIC TREE
@@ -178,8 +210,6 @@ task.spawn(function()
                 else
                     TeleportToIsland(ARG_TO_W1) -- Finished W2, go W1
                 end
-            else
-                -- No mobs selected? Do nothing.
             end
         end
     end
@@ -191,6 +221,7 @@ local Toggle = Tabs.Main:AddToggle("EnableHopper", {Title = "Enable Smart Hopper
 Toggle:OnChanged(function(Value)
     Config.Enabled = Value
     IsHopping = false
+    TriggerAutoSave()
 end)
 
 local MobDropdown = Tabs.Main:AddDropdown("MobSelect", {
@@ -212,11 +243,25 @@ MobDropdown:OnChanged(function(Value)
     for Name, Selected in pairs(Value) do
         if Selected then table.insert(Config.SelectedMobs, Name) end
     end
+    TriggerAutoSave()
 end)
 
+Tabs.Main:AddInput("FileNameInput", {
+    Title = "Script File Name",
+    Description = "Must match the file you saved in workspace.",
+    Default = "DonHub_Hopper.lua",
+    Placeholder = "DonHub_Hopper.lua",
+    Numeric = false,
+    Finished = true,
+    Callback = function(Value)
+        Config.FileName = Value
+        TriggerAutoSave()
+    end
+})
+
 Tabs.Main:AddParagraph({
-    Title = "Logic Explanation",
-    Content = "1. Only W1 Mobs: Hops to small W1 server.\n2. Only W2 Mobs: Loops W1 <-> W2.\n3. Mixed Mobs: Clears current world, then switches."
+    Title = "Auto-Execute Info",
+    Content = "For Auto-Execute to work, save this script as 'DonHub_Hopper.lua' in your executor's workspace folder."
 })
 
 --// SAVE MANAGER \\--
@@ -228,9 +273,16 @@ SaveManager:SetFolder("DonHub_Hopper")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
+--// AUTO LOAD \\--
+IsLoading = true
+if isfile("DonHub_Hopper/AutoSave.json") then
+    SaveManager:Load("AutoSave")
+end
+IsLoading = false
+
 Window:SelectTab(1)
 Fluent:Notify({
     Title = "DonHub Hopper",
-    Content = "Loaded Successfully",
+    Content = "Loaded & Config Restored",
     Duration = 5
 })
