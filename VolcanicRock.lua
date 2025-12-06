@@ -23,7 +23,7 @@ local LocalPlayer = Players.LocalPlayer
 local UserConfig = {
     Enabled = true,       
     HopDelay = 2,         -- Seconds to wait after 0 rocks found
-    StaleTimeout = 60,    -- Seconds to wait if rock count doesn't decrease
+    StaleTimeout = 120,    -- Seconds to wait if rock count doesn't decrease
     AutoReconnect = true, 
 }
 
