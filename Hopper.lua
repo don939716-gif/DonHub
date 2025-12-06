@@ -27,7 +27,7 @@ local UserConfig = {
     Mobs = {
         -- World 1
         ["Zombie"] = false,
-        ["Delver Zombie"] = true,
+        ["Delver Zombie"] = false,
         ["EliteZombie"] = false,
         ["Brute Zombie"] = false,
 
