@@ -21,7 +21,7 @@ local LocalPlayer = Players.LocalPlayer
 --// USER CONFIGURATION \\--
 local UserConfig = {
     Enabled = true,       -- Master switch
-    HopDelay = 3,         -- Seconds to wait after clearing mobs before hopping
+    HopDelay = 1,         -- Seconds to wait after clearing mobs before hopping
     AutoReconnect = true, -- [NEW] Automatically rejoin if disconnected (Error 277, etc)
     
     Mobs = {
