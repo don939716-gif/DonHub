@@ -1,11 +1,11 @@
 --[[
-    DonHub - Headless Smart Hopper v1.2
+    DonHub - Headless Smart Hopper v1.3
     Type: Standalone Utility (No UI)
     Author: Don
     
     Updates:
-    - Fixed World 2 Detection (Now checks for W2 mobs if ID fails).
-    - Added Debug Prints to F9 Console.
+    - Added On-Screen HUD for Mobile Debugging.
+    - Added "Stuck Failsafe" to force rotation if PlaceID detection fails.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,9 +22,8 @@ local LocalPlayer = Players.LocalPlayer
 --// USER CONFIGURATION \\--
 local UserConfig = {
     Enabled = true,       
-    HopDelay = 1,         
+    HopDelay = 3,         
     AutoReconnect = true, 
-    Debug = true, -- Prints status to F9 Console
     
     Mobs = {
         -- World 1
@@ -34,7 +33,7 @@ local UserConfig = {
         ["Brute Zombie"] = false,
 
         -- World 2
-        ["Bomber"] = true, -- Enabled for testing
+        ["Bomber"] = true, -- Enabled
         ["Skeleton Rogue"] = false,
         ["Axe Skeleton"] = false,
         ["Deathaxe Skeleton"] = false,
@@ -58,19 +57,29 @@ local W2_LIST = {"Bomber", "Skeleton Rogue", "Axe Skeleton", "Deathaxe Skeleton"
 
 --// STATE \\--
 local IsHopping = false
+local ZeroMobStartTime = 0
 
---// NOTIFICATION HELPER \\--
-local function Notify(Title, Text)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = Title,
-            Text = Text,
-            Duration = 5
-        })
-    end)
-    if UserConfig.Debug then
-        print("[DonHub Hopper]: " .. Text)
-    end
+--// HUD SETUP (Mobile Debug) \\--
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "DonHub_DebugHUD"
+if RunService:IsStudio() then ScreenGui.Parent = LocalPlayer.PlayerGui else ScreenGui.Parent = CoreGui end
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Parent = ScreenGui
+StatusLabel.Size = UDim2.new(0.5, 0, 0.1, 0)
+StatusLabel.Position = UDim2.new(0.25, 0, 0.05, 0)
+StatusLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+StatusLabel.BackgroundTransparency = 0.5
+StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+StatusLabel.TextScaled = true
+StatusLabel.Text = "Initializing..."
+StatusLabel.BorderSizePixel = 0
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = StatusLabel
+
+function UpdateHUD(Text)
+    StatusLabel.Text = Text
 end
 
 --// AUTO RECONNECT FAILSAFE \\--
@@ -84,8 +93,8 @@ if UserConfig.AutoReconnect then
         Overlay.ChildAdded:Connect(function(Child)
             if Child.Name == "ErrorPrompt" then
                 IsHopping = true
+                UpdateHUD("DISCONNECTED - REJOINING...")
                 while true do
-                    print("Disconnected! Attempting to Rejoin...")
                     pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
                     task.wait(5)
                 end
@@ -121,20 +130,16 @@ function DetermineCurrentWorld()
     if game.PlaceId == WORLD_2_ID then return 2 end
     if game.PlaceId == WORLD_1_ID then return 1 end
 
-    -- 2. Fallback: Check for unique mobs if ID doesn't match
-    -- If we see a Slime or Bomber, we are definitely in World 2
+    -- 2. Fallback: Check for unique mobs
     local Living = Workspace:FindFirstChild("Living")
     if Living then
         for _, v in pairs(Living:GetChildren()) do
             local Name = CleanMobName(v.Name)
-            if table.find(W2_LIST, Name) then
-                if UserConfig.Debug then print("Detected World 2 via Mob: " .. Name) end
-                return 2
-            end
+            if table.find(W2_LIST, Name) then return 2 end
         end
     end
 
-    -- Default to 1 if unsure
+    -- Default to 1 if unsure (This is what causes the bug if W2 mobs are dead)
     return 1
 end
 
@@ -142,7 +147,7 @@ function TeleportToIsland(IslandName)
     if IsHopping then return end
     IsHopping = true
     
-    Notify("Hopper", "Teleporting to " .. IslandName)
+    UpdateHUD("Teleporting to: " .. IslandName)
     
     task.spawn(function()
         local Remote = ReplicatedStorage.Shared.Packages.Knit.Services.PortalService.RF.TeleportToIsland
@@ -151,7 +156,8 @@ function TeleportToIsland(IslandName)
         end)
         
         if not Success then
-            warn("Teleport Failed: " .. tostring(Err))
+            UpdateHUD("Teleport Failed!")
+            task.wait(2)
             IsHopping = false
         end
     end)
@@ -161,7 +167,7 @@ function ServerHop()
     if IsHopping then return end
     IsHopping = true
     
-    Notify("Hopper", "Finding smallest server...")
+    UpdateHUD("Hopping Server...")
     
     task.spawn(function()
         while task.wait(1) do
@@ -194,11 +200,6 @@ end
 
 --// MAIN LOOP \\--
 
-Notify("DonHub", "Headless Hopper v1.2 Started")
-if UserConfig.Debug then
-    print("Current Place ID: " .. game.PlaceId)
-end
-
 task.spawn(function()
     while true do
         task.wait(1)
@@ -207,13 +208,28 @@ task.spawn(function()
         local MobsRemaining = GetMobCount()
         local WantsW1, WantsW2 = AnalyzeIntent()
         local CurrentWorld = DetermineCurrentWorld()
+        
+        -- Update HUD
+        UpdateHUD(string.format("W%d | Mobs: %d | ID: %d", CurrentWorld, MobsRemaining, game.PlaceId))
 
         if MobsRemaining == 0 then
-            task.wait(UserConfig.HopDelay)
-            if GetMobCount() > 0 then continue end
-
-            if UserConfig.Debug then
-                print("Clearing... World: " .. CurrentWorld .. " | WantsW1: " .. tostring(WantsW1) .. " | WantsW2: " .. tostring(WantsW2))
+            -- Timer Logic for Stuck Failsafe
+            if ZeroMobStartTime == 0 then
+                ZeroMobStartTime = tick()
+            end
+            
+            -- Wait delay
+            if tick() - ZeroMobStartTime < UserConfig.HopDelay then
+                continue
+            end
+            
+            -- STUCK FAILSAFE:
+            -- If we have 0 mobs for > 10 seconds, and we are farming W2, force a reset to W1.
+            -- This handles the case where the script thinks we are in W1 but we are actually in W2.
+            if tick() - ZeroMobStartTime > 10 and WantsW2 and not WantsW1 then
+                 UpdateHUD("Stuck Detected! Forcing W1 Reset...")
+                 TeleportToIsland(ARG_TO_W1)
+                 continue
             end
 
             -- LOGIC TREE
@@ -228,10 +244,8 @@ task.spawn(function()
             elseif not WantsW1 and WantsW2 then
                 -- Only W2 Mobs
                 if CurrentWorld == 2 then
-                    -- We are in W2, mobs are dead. Go to W1 to reset.
-                    TeleportToIsland(ARG_TO_W1) 
+                    TeleportToIsland(ARG_TO_W1) -- Loop via W1
                 else
-                    -- We are in W1, go to W2.
                     TeleportToIsland(ARG_TO_W2)
                 end
 
@@ -243,6 +257,8 @@ task.spawn(function()
                     TeleportToIsland(ARG_TO_W1)
                 end
             end
+        else
+            ZeroMobStartTime = 0 -- Reset timer if mobs found
         end
     end
 end)
