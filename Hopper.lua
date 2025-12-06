@@ -1,10 +1,11 @@
 --[[
-    DonHub - Headless Smart Hopper v1.1
+    DonHub - Headless Smart Hopper v1.2
     Type: Standalone Utility (No UI)
     Author: Don
     
     Updates:
-    - Added Auto-Reconnect Failsafe for Error 277/Disconnections.
+    - Fixed World 2 Detection (Now checks for W2 mobs if ID fails).
+    - Added Debug Prints to F9 Console.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,9 +21,10 @@ local LocalPlayer = Players.LocalPlayer
 
 --// USER CONFIGURATION \\--
 local UserConfig = {
-    Enabled = true,       -- Master switch
-    HopDelay = 1,         -- Seconds to wait after clearing mobs before hopping
-    AutoReconnect = true, -- [NEW] Automatically rejoin if disconnected (Error 277, etc)
+    Enabled = true,       
+    HopDelay = 3,         
+    AutoReconnect = true, 
+    Debug = true, -- Prints status to F9 Console
     
     Mobs = {
         -- World 1
@@ -32,7 +34,7 @@ local UserConfig = {
         ["Brute Zombie"] = false,
 
         -- World 2
-        ["Bomber"] = true,
+        ["Bomber"] = true, -- Enabled for testing
         ["Skeleton Rogue"] = false,
         ["Axe Skeleton"] = false,
         ["Deathaxe Skeleton"] = false,
@@ -66,7 +68,9 @@ local function Notify(Title, Text)
             Duration = 5
         })
     end)
-    print("[DonHub Hopper]: " .. Text)
+    if UserConfig.Debug then
+        print("[DonHub Hopper]: " .. Text)
+    end
 end
 
 --// AUTO RECONNECT FAILSAFE \\--
@@ -74,25 +78,16 @@ if UserConfig.AutoReconnect then
     task.spawn(function()
         local PromptGui = CoreGui:WaitForChild("RobloxPromptGui", 10)
         if not PromptGui then return end
-        
         local Overlay = PromptGui:WaitForChild("promptOverlay", 10)
         if not Overlay then return end
 
-        Notify("Failsafe", "Auto-Reconnect Active")
-
         Overlay.ChildAdded:Connect(function(Child)
             if Child.Name == "ErrorPrompt" then
-                -- Error Detected (Error 277, 267, etc.)
-                IsHopping = true -- Stop other logic
-                
-                -- Loop Rejoin Attempt
+                IsHopping = true
                 while true do
                     print("Disconnected! Attempting to Rejoin...")
-                    local Success, Err = pcall(function()
-                        TeleportService:Teleport(game.PlaceId, LocalPlayer)
-                    end)
-                    if Err then warn("Rejoin Failed: " .. tostring(Err)) end
-                    task.wait(5) -- Retry every 5 seconds
+                    pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
+                    task.wait(5)
                 end
             end
         end)
@@ -119,6 +114,28 @@ function GetMobCount()
         end
     end
     return Count
+end
+
+function DetermineCurrentWorld()
+    -- 1. Check ID Match
+    if game.PlaceId == WORLD_2_ID then return 2 end
+    if game.PlaceId == WORLD_1_ID then return 1 end
+
+    -- 2. Fallback: Check for unique mobs if ID doesn't match
+    -- If we see a Slime or Bomber, we are definitely in World 2
+    local Living = Workspace:FindFirstChild("Living")
+    if Living then
+        for _, v in pairs(Living:GetChildren()) do
+            local Name = CleanMobName(v.Name)
+            if table.find(W2_LIST, Name) then
+                if UserConfig.Debug then print("Detected World 2 via Mob: " .. Name) end
+                return 2
+            end
+        end
+    end
+
+    -- Default to 1 if unsure
+    return 1
 end
 
 function TeleportToIsland(IslandName)
@@ -177,7 +194,10 @@ end
 
 --// MAIN LOOP \\--
 
-Notify("DonHub", "Headless Hopper v1.1 Started")
+Notify("DonHub", "Headless Hopper v1.2 Started")
+if UserConfig.Debug then
+    print("Current Place ID: " .. game.PlaceId)
+end
 
 task.spawn(function()
     while true do
@@ -186,11 +206,15 @@ task.spawn(function()
 
         local MobsRemaining = GetMobCount()
         local WantsW1, WantsW2 = AnalyzeIntent()
-        local CurrentWorld = (game.PlaceId == WORLD_2_ID) and 2 or 1
+        local CurrentWorld = DetermineCurrentWorld()
 
         if MobsRemaining == 0 then
             task.wait(UserConfig.HopDelay)
             if GetMobCount() > 0 then continue end
+
+            if UserConfig.Debug then
+                print("Clearing... World: " .. CurrentWorld .. " | WantsW1: " .. tostring(WantsW1) .. " | WantsW2: " .. tostring(WantsW2))
+            end
 
             -- LOGIC TREE
             if WantsW1 and not WantsW2 then
@@ -204,8 +228,10 @@ task.spawn(function()
             elseif not WantsW1 and WantsW2 then
                 -- Only W2 Mobs
                 if CurrentWorld == 2 then
-                    TeleportToIsland(ARG_TO_W1) -- Loop via W1
+                    -- We are in W2, mobs are dead. Go to W1 to reset.
+                    TeleportToIsland(ARG_TO_W1) 
                 else
+                    -- We are in W1, go to W2.
                     TeleportToIsland(ARG_TO_W2)
                 end
 
