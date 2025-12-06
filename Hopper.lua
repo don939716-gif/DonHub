@@ -28,7 +28,7 @@ local UserConfig = {
         ["Brute Zombie"] = false,
 
         -- World 2
-        ["Bomber"] = false,
+        ["Bomber"] = true,
         ["Skeleton Rogue"] = false,
         ["Axe Skeleton"] = false,
         ["Deathaxe Skeleton"] = false,
