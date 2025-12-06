@@ -22,7 +22,7 @@ local LocalPlayer = Players.LocalPlayer
 --// USER CONFIGURATION \\--
 local UserConfig = {
     Enabled = true,       
-    HopDelay = 3,         
+    HopDelay = 1,         
     AutoReconnect = true, 
     
     Mobs = {
